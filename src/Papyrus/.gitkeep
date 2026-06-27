@@ -1,0 +1,4 @@
+# Reserved for the native<->Papyrus contract (not yet implemented):
+#   Papyrus.{h,cpp}          — GKNative function surface, bound via SKSE PapyrusInterface
+#   ModEvents.{h,cpp}        — mod-event vocabulary (SendModEvent names/args) emitted to Papyrus
+# Papyrus-facing script: GKNative.psc (lives in the separate Papyrus/CK repo).

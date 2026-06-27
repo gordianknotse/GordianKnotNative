@@ -1,0 +1,3 @@
+# Reserved for native event sinks (not yet implemented):
+#   EquipEventSink.{h,cpp}   — TESEquipEvent sink -> emits a mod event (replaces unreliable Papyrus OnEquipped)
+#   CombatEventSink.{h,cpp}  — TESCombatEvent sink -> serial main-thread dispatch via SKSE task interface

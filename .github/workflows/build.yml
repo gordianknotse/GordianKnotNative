@@ -1,0 +1,55 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Cache vcpkg-built dependencies (CommonLibSSE-NG et al.) in the GitHub Actions
+  # cache so they are not recompiled from scratch on every run.
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up CMake + Ninja
+        uses: lukka/get-cmake@latest
+
+      # Required for VCPKG_BINARY_SOURCES=x-gha to read/write the Actions cache.
+      - name: Export GitHub Actions cache environment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Point VCPKG_ROOT at the runner's vcpkg
+        shell: pwsh
+        run: echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Configure (Release, x64-windows-static)
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Upload GordianKnot.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: GordianKnot
+          path: |
+            build/release/GordianKnot.dll
+            build/release/GordianKnot.pdb
+          if-no-files-found: error

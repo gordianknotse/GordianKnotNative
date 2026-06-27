@@ -1,0 +1,9 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "name": "gordian-knot",
+    "version-string": "0.1.0",
+    "description": "Gordian Knot — native SKSE layer (equip/combat events, co-save serialization, Papyrus surface).",
+    "dependencies": [
+        "commonlibsse-ng"
+    ]
+}

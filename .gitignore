@@ -1,0 +1,35 @@
+# --- CMake / vcpkg build trees (NEVER commit; must never reach the packaged mod) ---
+build/
+out/
+install/
+dist/
+cmake-build*/
+vcpkg_installed/
+/vcpkg/
+.vcpkg/
+
+# CMake noise
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+compile_commands.json
+
+# --- IDE / editor ---
+.vs/
+.vscode/
+.idea/
+*.user
+
+# --- Claude Code local/runtime state ---
+.claude/
+
+# --- OS / misc ---
+Thumbs.db
+desktop.ini
+
+# Build artifacts that might appear loose
+*.dll
+*.pdb
+*.lib
+*.exp
+*.ilk

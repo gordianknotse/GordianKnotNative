@@ -1,0 +1,6 @@
+# Reserved for SKSE co-save serialization (not yet implemented; replaces StorageUtil):
+#   Serialization.{h,cpp}    — SKSE serialization interface: Save/Load/Revert callbacks
+#   Records.{h,cpp}          — per-record-type codes + version numbers, additive-only schema
+#   Containers.{h,cpp}       — per-NPC / per-door state in STL containers
+# Design: logical enum keys for authored NPCs (GkLabWarden01-04, GkWanderer01-04);
+# FormID resolution only for dynamic / cross-mod forms; revert callback clears containers.
