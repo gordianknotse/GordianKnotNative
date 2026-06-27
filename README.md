@@ -1,20 +1,157 @@
 # Gordian Knot — Native (SKSE / CommonLibSSE-NG)
 
 Native C++ layer for the **Gordian Knot** Skyrim SE/AE mod. Builds to
-`GordianKnot.dll`, a runtime-agnostic SKSE plugin (SE 1.5.x / AE 1.6.x / GOG / VR
-via Address Library). The Papyrus / Creation Kit side (`GordianKnot.esp`,
-`Scripts/Source/*.psc`, `GordianKnot.ppj`) lives in a separate repository; this
-repo is native-only.
+`GordianKnot.dll`, a runtime-agnostic SKSE plugin (SE 1.5.x / AE 1.6.x / GOG / VR via
+Address Library). The Papyrus / Creation Kit side (`GordianKnot.esp`,
+`Scripts/Source/*.psc`, `GordianKnot.ppj`) lives in a **separate repository**; this repo
+is native-only.
 
 Native owns: equip detection, combat events, SKSE co-save serialization.
-Papyrus keeps: quest orchestration, alias pool, MCM, stage flow. The two sides
-talk over a `GKNative` Papyrus function surface plus a mod-event vocabulary.
+Papyrus keeps: quest orchestration, alias pool, MCM, stage flow. The two sides talk over a
+`GKNative` Papyrus function surface plus a mod-event vocabulary.
 
-## Layout
+---
+
+## Requirements
+
+You need four things: a C++ toolchain (MSVC), CMake + Ninja, a bootstrapped **vcpkg**, and
+Git. Everything else (CommonLibSSE-NG, fmt, spdlog, …) is pulled automatically by vcpkg on
+first configure.
+
+### 1. Visual Studio Build Tools (MSVC)
+
+Install **Visual Studio Build Tools 2022 or newer** (this project is developed against
+Build Tools 2026 / MSVC 14.51) with the **Desktop development with C++** workload, which
+includes the MSVC compiler and the Windows SDK. The full Visual Studio Community edition
+works too.
+
+> This project builds with a very new MSVC. The vcpkg baseline is pinned accordingly — see
+> *Troubleshooting* if you hit an `stdext` / `fmt` compile error.
+
+### 2. CMake ≥ 3.21 and Ninja
+
+You don't need standalone installs — both **CLion** and the **VS Build Tools** bundle a
+recent CMake and Ninja:
+
+- VS Build Tools: `…\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`
+  and `…\Ninja\ninja.exe`.
+- CLion: `…\CLion <ver>\bin\cmake\…` and `…\bin\ninja\…`.
+
+Standalone installs are fine too if you prefer them on PATH.
+
+### 3. vcpkg (bootstrapped) + `VCPKG_ROOT`
+
+The build uses vcpkg in **manifest mode**. You only need to clone and bootstrap it once;
+CMake invokes it for you (do **not** run `vcpkg install` by hand).
+
+Clone it somewhere stable (this project assumes `C:\dev\vcpkg`) and bootstrap:
+
+```cmd
+git clone https://github.com/microsoft/vcpkg C:\dev\vcpkg
+C:\dev\vcpkg\bootstrap-vcpkg.bat
+```
+
+Then set the **`VCPKG_ROOT`** environment variable to that folder (the CMake presets read
+`$env{VCPKG_ROOT}`). `setx` writes it permanently to your **user** environment:
+
+```cmd
+setx VCPKG_ROOT "C:\dev\vcpkg"
+```
+
+> `setx` only affects **new** processes — open a fresh terminal (and restart CLion) so it
+> picks up the variable. Verify with `echo %VCPKG_ROOT%`.
+>
+> Caveat: the **VS Developer Command Prompt** overrides `VCPKG_ROOT` with its own bundled
+> vcpkg. Build from a plain shell, or rely on the CMake presets / CLion's Visual Studio
+> toolchain, so this standalone clone is the one used.
+
+The exact dependency versions are pinned by the registries/baselines in
+`vcpkg-configuration.json`, so any recently bootstrapped vcpkg works — its own port
+checkout doesn't matter.
+
+### 4. Git
+
+Any recent Git for Windows.
+
+---
+
+## Building in CLion (step by step)
+
+CLion opens a CMake project directly — there is no separate "import" step.
+
+1. **Open the folder.** *File → Open* → select this repo's root → *Open as Project*. CLion
+   detects `CMakeLists.txt` and `CMakePresets.json`.
+2. **Enable the presets.** When prompted (or under *Settings → Build, Execution, Deployment
+   → CMake*), enable the **release** and **debug** presets.
+3. **Add a Visual Studio toolchain.** *Settings → Build, Execution, Deployment →
+   Toolchains* → **+ → Visual Studio**. Set the toolset path to your Build Tools install
+   (e.g. `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools`) and architecture
+   **amd64**. (Leave any other toolchains, e.g. an ESP-IDF "System" one, in place — the
+   toolchain list is global and shared across all your projects.)
+4. **Point the presets at it.** Back in *Settings → CMake*, for the **release** (and
+   **debug**) profile set **Toolchain → Visual Studio**. This is stored per-project, so it
+   won't affect your other projects.
+5. **Leave the rest to the preset.** Generator, build type, compiler, toolchain file and
+   triplet all come from `--preset`. Leave CLion's **Generator** on *Let CMake decide* and
+   don't re-specify those — the only thing CLion must supply is the Visual Studio
+   *toolchain* (the MSVC environment that puts `cl.exe` on PATH).
+6. **Ensure `VCPKG_ROOT` is set** (see Requirements). If CLion was open before you ran
+   `setx`, restart it so it inherits the variable.
+7. **Reload & build.** *Tools → CMake → Reset Cache and Reload Project*. The first
+   configure compiles CommonLibSSE-NG via vcpkg (~2 min; cached afterward). Then pick the
+   **release** profile + **GordianKnot** target and **Build** (Ctrl+F9).
+
+A successful configure shows `The CXX compiler identification is MSVC 19.51.x` →
+`Configuring done`. If it instead says the compiler is *unknown* / `cl.exe ... not found`,
+the active toolchain isn't Visual Studio (step 3–4).
+
+## Building from the command line
+
+From a shell where `cl.exe` is available (VS Developer prompt or after calling
+`vcvars64.bat`), with `VCPKG_ROOT` set:
+
+```sh
+cmake --preset release
+cmake --build --preset release
+```
+
+---
+
+## Output & deploying to the game (MO2)
+
+Each build produces `build/<preset>/GordianKnot.dll` and stages it into a mod-shaped
+folder at the repo root:
+
+```
+dist/
+└─ SKSE/Plugins/GordianKnot.dll
+```
+
+Link `dist/` into Mod Organizer 2 as a mod (one-time; MO2 closed). A directory junction
+keeps this repo the source of truth:
+
+```cmd
+mklink /J "C:\path\to\MO2\mods\GordianKnotNative" "C:\games\mods\Gordian Knot Native\dist"
+```
+
+Reopen MO2, press **F5**, enable **GordianKnotNative**, and launch **SKSE through MO2**.
+Confirm load in `Documents\My Games\Skyrim Special Edition\SKSE\GordianKnot.log` —
+look for `GordianKnot native plugin loaded.`
+
+Prerequisites on the MO2 side (independent of this plugin): **SKSE** and **Address Library
+for SKSE Plugins** installed and enabled in that profile (this is an Address-Library
+plugin).
+
+Alternatively, set `SKYRIM_MODS_FOLDER` (MO2/Vortex mods dir) or `SKYRIM_FOLDER` (game
+root) before configuring and the build copies straight there instead of `dist/`.
+
+---
+
+## Project layout
 
 | Path                       | Purpose                                                            |
 | -------------------------- | ----------------------------------------------------------------- |
-| `CMakeLists.txt`           | Build definition; `add_commonlibsse_plugin` target + auto-deploy. |
+| `CMakeLists.txt`           | `add_commonlibsse_plugin` target + `dist/` auto-deploy.           |
 | `CMakePresets.json`        | `debug` / `release` presets (Ninja, MSVC, `x64-windows-static`).  |
 | `vcpkg.json`               | Manifest: depends on `commonlibsse-ng`.                           |
 | `vcpkg-configuration.json` | Registries: microsoft default + colorglass (CommonLibSSE-NG).     |
@@ -24,22 +161,18 @@ talk over a `GKNative` Papyrus function surface plus a mod-event vocabulary.
 | `src/Events/`              | *(reserved)* TESEquipEvent / TESCombatEvent sinks.               |
 | `src/Serialization/`       | *(reserved)* SKSE co-save serialization.                          |
 | `src/Papyrus/`             | *(reserved)* GKNative function surface + mod events.              |
-| `.github/workflows/`       | CI build with vcpkg GHA binary caching.                           |
+| `.github/workflows/`       | CI build with vcpkg GitHub Actions binary caching.                |
 
-## Building
+---
 
-Requires: VS Build Tools (MSVC), CMake ≥ 3.21, Ninja, a bootstrapped vcpkg with
-`VCPKG_ROOT` set. Build from a shell where `cl.exe` is available (VS Dev prompt
-or `vcvars64`), or open the folder in CLion / VS and pick a preset.
+## Troubleshooting
 
-```sh
-cmake --preset release
-cmake --build --preset release
-```
-
-Output: `build/release/GordianKnot.dll`. Set `SKYRIM_MODS_FOLDER` (MO2/Vortex
-mods dir) or `SKYRIM_FOLDER` (game root) to auto-copy the DLL to
-`<folder>/SKSE/Plugins` after each build.
-
-> First configure compiles CommonLibSSE-NG from source via vcpkg — expect several
-> minutes. Subsequent builds use the vcpkg binary cache.
+- **`error C2653: 'stdext' is not a class or namespace name`** (building `fmt`): the vcpkg
+  `default-registry` baseline is too old for your MSVC. This project already pins a recent
+  baseline in `vcpkg-configuration.json`; if you regenerated config from a template, bump
+  the microsoft baseline to a current commit (don't downgrade the compiler).
+- **`CMAKE_CXX_COMPILER: cl.exe is not a full path and was not found in PATH`**: the active
+  toolchain isn't Visual Studio, so the MSVC environment wasn't applied. Fix the CLion
+  toolchain (setup steps 3–4) or call `vcvars64.bat` first on the command line.
+- **`VCPKG_ROOT` empty / vcpkg toolchain file not found**: set it via `setx` and restart
+  the shell/IDE.
