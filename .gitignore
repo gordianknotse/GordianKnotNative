@@ -5,6 +5,9 @@ install/
 dist/
 cmake-build*/
 vcpkg_installed/
+
+# Deployed plugin output at the repo root (repo root is the MO2 mod)
+/SKSE/
 /vcpkg/
 .vcpkg/
 

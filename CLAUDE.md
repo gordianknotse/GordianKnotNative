@@ -44,9 +44,9 @@ cmake --build --preset release
 ```
 
 - Output: `build/<preset>/GordianKnot.dll`.
-- A `POST_BUILD` step stages it into **`dist/SKSE/Plugins/`** (a MO2-ready mod). Override
-  the target with env vars `SKYRIM_MODS_FOLDER` (→ `<mods>/GordianKnotNative`) or
-  `SKYRIM_FOLDER` (→ `<game>/Data`).
+- A `POST_BUILD` step stages it into **`<repo>/SKSE/Plugins/`** — the repo root is itself
+  the MO2 mod. Override with env vars `SKYRIM_MODS_FOLDER` (→ `<mods>/GordianKnotNative`)
+  or `SKYRIM_FOLDER` (→ `<game>/Data`).
 - `cl.exe` must be on PATH — i.e. run inside an MSVC env (`vcvars64.bat`), or let CLion's
   **Visual Studio toolchain** provide it. See README for CLion setup.
 - `VCPKG_ROOT` must point at a bootstrapped vcpkg clone (presets read `$env{VCPKG_ROOT}`).

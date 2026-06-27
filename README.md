@@ -119,31 +119,60 @@ cmake --build --preset release
 
 ## Output & deploying to the game (MO2)
 
-Each build produces `build/<preset>/GordianKnot.dll` and stages it into a mod-shaped
-folder at the repo root:
+Each build produces `build/<preset>/GordianKnot.dll` and stages it into the repo root
+laid out as a Skyrim mod:
 
 ```
-dist/
-└─ SKSE/Plugins/GordianKnot.dll
+SKSE/Plugins/GordianKnot.dll
 ```
 
-Link `dist/` into Mod Organizer 2 as a mod (one-time; MO2 closed). A directory junction
-keeps this repo the source of truth:
+The **repo root itself is the MO2 mod** — register it in MO2's mods folder (e.g. a
+directory junction so this repo stays the source of truth):
 
 ```cmd
-mklink /J "C:\path\to\MO2\mods\GordianKnotNative" "C:\games\mods\Gordian Knot Native\dist"
+mklink /J "C:\path\to\MO2\mods\GordianKnotNative" "C:\games\mods\Gordian Knot Native"
 ```
 
 Reopen MO2, press **F5**, enable **GordianKnotNative**, and launch **SKSE through MO2**.
 Confirm load in `Documents\My Games\Skyrim Special Edition\SKSE\GordianKnot.log` —
 look for `GordianKnot native plugin loaded.`
 
+> Trade-off: with the repo root as the mod, MO2's VFS overlays the whole repo (including
+> `build/` and `.git/`) onto the game's Data. It works but is heavy; if MO2 gets sluggish,
+> point the MO2 mod at a dedicated subfolder instead and set `OUTPUT_FOLDER` (in
+> `CMakeLists.txt`) to match.
+
 Prerequisites on the MO2 side (independent of this plugin): **SKSE** and **Address Library
 for SKSE Plugins** installed and enabled in that profile (this is an Address-Library
 plugin).
 
 Alternatively, set `SKYRIM_MODS_FOLDER` (MO2/Vortex mods dir) or `SKYRIM_FOLDER` (game
-root) before configuring and the build copies straight there instead of `dist/`.
+root) before configuring and the build copies straight there instead.
+
+---
+
+## Viewing logs
+
+The plugin logs to `Documents\My Games\Skyrim Special Edition\SKSE\GordianKnot.log`
+(under OneDrive if your Documents are redirected). This is **separate** from the Papyrus
+log — it's an spdlog file sink, and `SkyrimSE.exe` has no console, so nothing streams by
+default. Two convenient ways to watch it:
+
+**Tail it into a CLion console (one click).** `tools/tail-log.ps1` waits for the log to
+appear and then follows it. Wire it up once:
+
+- *Run → Edit Configurations → + → Shell Script*
+- Name: `Tail GordianKnot.log`
+- Execute: *Script file* → `tools/tail-log.ps1`
+- Interpreter: `powershell.exe`, options `-NoProfile -ExecutionPolicy Bypass -File`
+
+Click ▶ and log lines stream into the Run window. (The log is truncated each game launch,
+so launch the game first, then start/restart the tail.)
+
+**Debugger / DebugView (Debug builds only).** Debug builds also emit every line via
+`OutputDebugString`. Attach CLion to `SkyrimSE.exe` (*Run → Attach to Process*) and the log
+appears live in the debugger console, or run Sysinternals **DebugView** to watch it without
+attaching. (Release builds omit this sink.)
 
 ---
 

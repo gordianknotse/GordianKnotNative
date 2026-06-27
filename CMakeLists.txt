@@ -10,20 +10,20 @@ cmake_minimum_required(VERSION 3.21)
 project(GordianKnot VERSION 0.1.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
-# Auto-deploy. By DEFAULT every build stages the plugin into <repo>/dist,
-# laid out exactly like a Skyrim mod (dist/SKSE/Plugins/GordianKnot.dll). This
-# makes the repo itself a ready-to-use MO2 mod: link dist/ into MO2 as a mod via
-# a directory junction (run once, as Administrator if needed):
+# Auto-deploy. By DEFAULT every build stages the plugin into the repo ROOT laid
+# out as a Skyrim mod (<repo>/SKSE/Plugins/GordianKnot.dll), because the repo
+# root itself is registered as the mod in MO2.
 #
-#     mklink /J "C:\path\to\MO2\mods\GordianKnotNative" "C:\games\mods\Gordian Knot Native\dist"
+# NOTE: with the repo root as the MO2 mod, MO2's VFS overlays the ENTIRE repo
+# (including build/ and .git/) onto the game's Data. It works, but it's heavy; if
+# MO2 gets sluggish, point the MO2 mod at a clean subfolder instead and set
+# OUTPUT_FOLDER to match.
 #
-# Then enable "GordianKnotNative" in MO2 and launch SKSE through MO2.
-#
-# Optional overrides (set the env var to deploy elsewhere instead of dist/):
+# Optional overrides (set the env var to deploy elsewhere instead of the root):
 #   SKYRIM_MODS_FOLDER -> <mods>/GordianKnotNative   (deploy straight into MO2/Vortex)
 #   SKYRIM_FOLDER      -> <game>/Data                (deploy straight into the game)
 # ---------------------------------------------------------------------------
-set(OUTPUT_FOLDER "${CMAKE_SOURCE_DIR}/dist")
+set(OUTPUT_FOLDER "${CMAKE_SOURCE_DIR}")
 
 if(DEFINED ENV{SKYRIM_MODS_FOLDER} AND IS_DIRECTORY "$ENV{SKYRIM_MODS_FOLDER}")
     set(OUTPUT_FOLDER "$ENV{SKYRIM_MODS_FOLDER}/GordianKnotNative")
