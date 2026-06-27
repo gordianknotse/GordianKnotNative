@@ -44,9 +44,11 @@ find_package(CommonLibSSE CONFIG REQUIRED)
 # listed so IDEs (CLion / VS) surface them in the project tree.
 set(SOURCES
     src/Plugin.cpp
+    src/Events/EquipEventSink.cpp
 
     src/Log.h
     src/PCH.h
+    src/Events/EquipEventSink.h
 )
 
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})

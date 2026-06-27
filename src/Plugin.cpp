@@ -1,5 +1,7 @@
 #include "Log.h"
 
+#include "Events/EquipEventSink.h"
+
 // =============================================================================
 // Gordian Knot — native SKSE entry point.
 //
@@ -20,11 +22,11 @@ namespace {
             break;
 
         case SKSE::MessagingInterface::kDataLoaded:
-            // Game data is ready. Future subsystems register here:
-            //   - TESEquipEvent sink   (equip detection -> mod event)
+            // Game data is ready. Subsystems register here.
+            GK::Events::EquipEventSink::Install();
+            // Still to come:
             //   - TESCombatEvent sink  (combat dispatch via SKSE task interface)
             //   - GKNative Papyrus function registration
-            logger::info("kDataLoaded: game data ready (subsystems will register here).");
             break;
 
         case SKSE::MessagingInterface::kPreLoadGame:
