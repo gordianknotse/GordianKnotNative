@@ -6,8 +6,10 @@
 #include <vector>
 
 // Installs the logger. Always writes to a file at:
-//   Documents/My Games/Skyrim Special Edition/SKSE/GordianKnot.log
-// (path from SKSE::log::log_directory(); file name from the plugin name).
+//   Documents/My Games/<game>/SKSE/GordianKnot.log
+// where <game> is whatever SKSE::log::log_directory() resolves at runtime
+// (usually "Skyrim Special Edition"; some MO2 setups resolve e.g. "Skyrim.INI",
+// shared by all CommonLibSSE-NG plugins). File name comes from the plugin name.
 //
 // In Debug builds it ALSO emits via OutputDebugString, so log lines show up live
 // in a debugger console attached to SkyrimSE.exe (e.g. CLion's "Attach to

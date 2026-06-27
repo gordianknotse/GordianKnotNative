@@ -134,8 +134,8 @@ mklink /J "C:\path\to\MO2\mods\GordianKnotNative" "C:\games\mods\Gordian Knot Na
 ```
 
 Reopen MO2, press **F5**, enable **GordianKnotNative**, and launch **SKSE through MO2**.
-Confirm load in `Documents\My Games\Skyrim Special Edition\SKSE\GordianKnot.log` —
-look for `GordianKnot native plugin loaded.`
+Confirm load in `Documents\My Games\<game>\SKSE\GordianKnot.log` (see *Viewing logs* for
+the folder caveat) — look for `GordianKnot native plugin loaded.`
 
 > Trade-off: with the repo root as the mod, MO2's VFS overlays the whole repo (including
 > `build/` and `.git/`) onto the game's Data. It works but is heavy; if MO2 gets sluggish,
@@ -153,13 +153,16 @@ root) before configuring and the build copies straight there instead.
 
 ## Viewing logs
 
-The plugin logs to `Documents\My Games\Skyrim Special Edition\SKSE\GordianKnot.log`
-(under OneDrive if your Documents are redirected). This is **separate** from the Papyrus
-log — it's an spdlog file sink, and `SkyrimSE.exe` has no console, so nothing streams by
-default. Two convenient ways to watch it:
+The plugin logs to `Documents\My Games\<game>\SKSE\GordianKnot.log` (under OneDrive if
+Documents is redirected). `<game>` is whatever CommonLibSSE-NG resolves at runtime —
+usually `Skyrim Special Edition`, but some MO2 profiles resolve it to e.g. `Skyrim.INI`
+(all CommonLib-NG plugin logs share that folder, distinct from SKSE's own `skse64.log`).
+This is **separate** from the Papyrus log — it's an spdlog file sink, and `SkyrimSE.exe`
+has no console, so nothing streams by default. Two convenient ways to watch it:
 
-**Tail it into a CLion console (one click).** `tools/tail-log.ps1` waits for the log to
-appear and then follows it. Wire it up once:
+**Tail it into a CLion console (one click).** `tools/tail-log.ps1` searches under
+`My Games` for the newest `GordianKnot.log`, waits for it to appear, then follows it
+(so it works regardless of which folder CommonLib resolves). Wire it up once:
 
 - *Run → Edit Configurations → + → Shell Script*
 - Name: `Tail GordianKnot.log`
