@@ -27,6 +27,9 @@ namespace GK {
         // FormIDs of every tracked actor whose status equals a_status.
         [[nodiscard]] std::vector<RE::FormID> GetByStatus(std::int32_t a_status) const;
 
+        // Inserts or overwrites a record wholesale (used by serialization load).
+        void Put(RE::FormID a_actor, const ActorRecord& a_record) { _records[a_actor] = a_record; }
+
         void Forget(RE::FormID a_actor);
         void Clear();
 

@@ -2,6 +2,7 @@
 
 #include "Events/EquipEventSink.h"
 #include "Papyrus/GKNative.h"
+#include "Serialization/Serialization.h"
 
 // =============================================================================
 // Gordian Knot — native SKSE entry point.
@@ -69,6 +70,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
         logger::error("Failed to register GKNative Papyrus functions.");
         return false;
     }
+
+    // Register SKSE co-save serialization (Save/Load/Revert) for native state.
+    GK::Serialization::Install();
 
     return true;
 }

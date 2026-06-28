@@ -48,6 +48,7 @@ set(SOURCES
     src/State/ActorRegistry.cpp
     src/State/GameState.cpp
     src/Papyrus/GKNative.cpp
+    src/Serialization/Serialization.cpp
 
     src/Log.h
     src/PCH.h
@@ -56,6 +57,8 @@ set(SOURCES
     src/State/ActorRegistry.h
     src/State/GameState.h
     src/Papyrus/GKNative.h
+    src/Serialization/Records.h
+    src/Serialization/Serialization.h
 )
 
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
