@@ -1,6 +1,7 @@
 #include "Log.h"
 
 #include "Events/EquipEventSink.h"
+#include "Papyrus/GKNative.h"
 
 // =============================================================================
 // Gordian Knot — native SKSE entry point.
@@ -58,6 +59,14 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     auto* messaging = SKSE::GetMessagingInterface();
     if (!messaging->RegisterListener("SKSE", OnSKSEMessage)) {
         logger::error("Failed to register SKSE messaging listener.");
+        return false;
+    }
+
+    // Register the GKNative Papyrus function surface. The interface invokes the
+    // callback once per VM init, so it's safe to register here at load time.
+    auto* papyrus = SKSE::GetPapyrusInterface();
+    if (!papyrus || !papyrus->Register(GK::Papyrus::Register)) {
+        logger::error("Failed to register GKNative Papyrus functions.");
         return false;
     }
 

@@ -45,10 +45,17 @@ find_package(CommonLibSSE CONFIG REQUIRED)
 set(SOURCES
     src/Plugin.cpp
     src/Events/EquipEventSink.cpp
+    src/State/ActorRegistry.cpp
+    src/State/GameState.cpp
+    src/Papyrus/GKNative.cpp
 
     src/Log.h
     src/PCH.h
     src/Events/EquipEventSink.h
+    src/State/ActorState.h
+    src/State/ActorRegistry.h
+    src/State/GameState.h
+    src/Papyrus/GKNative.h
 )
 
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
