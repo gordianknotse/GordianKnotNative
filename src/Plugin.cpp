@@ -28,7 +28,6 @@ namespace {
             GK::Events::EquipEventSink::Install();
             // Still to come:
             //   - TESCombatEvent sink  (combat dispatch via SKSE task interface)
-            //   - GKNative Papyrus function registration
             break;
 
         case SKSE::MessagingInterface::kPreLoadGame:

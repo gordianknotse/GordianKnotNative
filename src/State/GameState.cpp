@@ -9,5 +9,8 @@ namespace GK {
     void GameState::Reset() {
         auto lock = Lock();
         _actors.Clear();
+        _labyrinths.Clear();
+        _resources.Clear();
+        // _keywords intentionally retained (live session config, not save state).
     }
 }

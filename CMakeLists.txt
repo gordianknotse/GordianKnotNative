@@ -47,6 +47,7 @@ set(SOURCES
     src/Events/EquipEventSink.cpp
     src/State/ActorRegistry.cpp
     src/State/GameState.cpp
+    src/State/Labyrinth.cpp
     src/Papyrus/GKNative.cpp
     src/Serialization/Serialization.cpp
 
@@ -56,6 +57,12 @@ set(SOURCES
     src/State/ActorState.h
     src/State/ActorRegistry.h
     src/State/GameState.h
+    src/State/Resource.h
+    src/State/Cell.h
+    src/State/Marker.h
+    src/State/Furniture.h
+    src/State/ResourceRegistry.h
+    src/State/Labyrinth.h
     src/Papyrus/GKNative.h
     src/Serialization/Records.h
     src/Serialization/Serialization.h

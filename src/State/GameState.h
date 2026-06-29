@@ -1,6 +1,8 @@
 #pragma once
 
 #include "State/ActorRegistry.h"
+#include "State/Labyrinth.h"
+#include "State/ResourceRegistry.h"
 
 #include <mutex>
 
@@ -23,9 +25,14 @@ namespace GK {
         [[nodiscard]] std::unique_lock<std::recursive_mutex> Lock() { return std::unique_lock(_mutex); }
 
         [[nodiscard]] ActorRegistry& Actors() { return _actors; }
+        [[nodiscard]] LabyrinthRegistry& Labyrinths() { return _labyrinths; }
+        [[nodiscard]] ResourceRegistry& Resources() { return _resources; }
+        [[nodiscard]] ResourceKeywords& Keywords() { return _keywords; }
 
-        // Wipes all state. Called from the SKSE Revert callback (Phase 2) before a
-        // save is loaded, and reusable for a clean slate.
+        // Wipes per-save state (actors, labyrinths, resources). Called from the SKSE
+        // Revert callback before a save is loaded. The keyword config is NOT cleared:
+        // those are live session pointers re-supplied by Papyrus, independent of any
+        // save.
         void Reset();
 
         GameState(const GameState&) = delete;
@@ -39,5 +46,8 @@ namespace GK {
 
         std::recursive_mutex _mutex;
         ActorRegistry _actors;
+        LabyrinthRegistry _labyrinths;
+        ResourceRegistry _resources;
+        ResourceKeywords _keywords;
     };
 }
