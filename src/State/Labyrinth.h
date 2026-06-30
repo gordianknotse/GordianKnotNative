@@ -1,60 +1,38 @@
 #pragma once
 
-#include <unordered_map>
+#include <unordered_set>
 
 // =============================================================================
 // Labyrinths + keyword-driven resource discovery (Encoding B).
 //
-// A labyrinth is identified by a Keyword and anchored by an XMarker reference
-// (its position). Each resource reference links to its labyrinth's anchor via a
-// type keyword (GK_CellDoor / GK_PatrolMarker / GK_Furniture); a cell door also
-// links to its in/out markers (GK_InMarker / GK_OutMarker). Discovery enumerates
-// loaded cell references and probes those linked refs. See docs/PLAN-V1.md §2/§6.
+// A labyrinth is identified directly by its anchor XMarker reference: the anchor
+// both names the labyrinth and gives it a position. Each resource reference links
+// to that anchor via a type keyword (GK_CellDoor / GK_PatrolMarker /
+// GK_Furniture); a cell door also links to its in/out markers (GK_InMarker /
+// GK_OutMarker). Discovery probes those linked refs and matches the target
+// against the registered anchors. See docs/PLAN-V1.md §2/§6.
 // =============================================================================
 
 namespace GK {
-    struct Labyrinth {
-        RE::FormID keyword = 0;  // labyrinth keyword FormID
-        RE::FormID anchor = 0;   // anchor XMarker REFR FormID
-    };
-
-    // keyword <-> anchor registry. NOT thread-safe; used under the GameState lock.
+    // The set of registered labyrinth anchors (REFR FormIDs). A resource belongs to
+    // a labyrinth iff its type linked-ref targets one of these anchors.
+    // NOT thread-safe; used under the GameState lock.
     class LabyrinthRegistry {
     public:
-        void Register(RE::FormID a_keyword, RE::FormID a_anchor) {
-            _byKeyword[a_keyword] = Labyrinth{a_keyword, a_anchor};
-        }
+        void Register(RE::FormID a_anchor) { _anchors.insert(a_anchor); }
 
-        [[nodiscard]] const Labyrinth* Find(RE::FormID a_keyword) const {
-            const auto it = _byKeyword.find(a_keyword);
-            return it != _byKeyword.end() ? &it->second : nullptr;
-        }
+        // Is this FormID a registered labyrinth anchor?
+        [[nodiscard]] bool Contains(RE::FormID a_anchor) const { return _anchors.contains(a_anchor); }
 
-        [[nodiscard]] RE::FormID AnchorOf(RE::FormID a_keyword) const {
-            const auto* lab = Find(a_keyword);
-            return lab ? lab->anchor : 0;
-        }
+        [[nodiscard]] bool Empty() const { return _anchors.empty(); }
 
-        // Reverse lookup: which labyrinth keyword owns this anchor (0 if none).
-        // Linear over a handful of labyrinths — used per discovered reference.
-        [[nodiscard]] RE::FormID KeywordForAnchor(RE::FormID a_anchor) const {
-            for (const auto& [kw, lab] : _byKeyword) {
-                if (lab.anchor == a_anchor) {
-                    return kw;
-                }
-            }
-            return 0;
-        }
+        void Clear() { _anchors.clear(); }
 
-        [[nodiscard]] bool Empty() const { return _byKeyword.empty(); }
-
-        void Clear() { _byKeyword.clear(); }
-
-        [[nodiscard]] std::unordered_map<RE::FormID, Labyrinth>& All() { return _byKeyword; }
-        [[nodiscard]] const std::unordered_map<RE::FormID, Labyrinth>& All() const { return _byKeyword; }
+        [[nodiscard]] std::unordered_set<RE::FormID>& All() { return _anchors; }
+        [[nodiscard]] const std::unordered_set<RE::FormID>& All() const { return _anchors; }
 
     private:
-        std::unordered_map<RE::FormID, Labyrinth> _byKeyword;
+        std::unordered_set<RE::FormID> _anchors;
     };
 
     // The five type keywords used during discovery. Passed in each session via

@@ -17,11 +17,6 @@ namespace {
         return form ? form->As<RE::TESObjectREFR>() : nullptr;
     }
 
-    RE::BGSKeyword* AsKeyword(RE::FormID a_id) {
-        auto* form = a_id ? RE::TESForm::LookupByID(a_id) : nullptr;
-        return form ? form->As<RE::BGSKeyword>() : nullptr;
-    }
-
     // Resolve a list of actor FormIDs back to live RE::Actor* (dropping any that no
     // longer resolve) for return to Papyrus as an Actor[].
     std::vector<RE::Actor*> ResolveActors(const std::vector<RE::FormID>& a_ids) {
@@ -155,31 +150,21 @@ namespace {
         }
     }
 
-    void RegisterLabyrinth(RE::StaticFunctionTag*, RE::BGSKeyword* a_labyrinth, RE::TESObjectREFR* a_anchor) {
-        if (!a_labyrinth || !a_anchor) {
-            logger::warn("GKNative: RegisterLabyrinth ignored (null keyword or anchor).");
+    void RegisterLabyrinth(RE::StaticFunctionTag*, RE::TESObjectREFR* a_anchor) {
+        if (!a_anchor) {
+            logger::warn("GKNative: RegisterLabyrinth ignored (null anchor).");
             return;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Labyrinths().Register(a_labyrinth->GetFormID(), a_anchor->GetFormID());
-        logger::info("GKNative: registered labyrinth {:08X} (anchor {:08X}).", a_labyrinth->GetFormID(),
-                     a_anchor->GetFormID());
+        state->Labyrinths().Register(a_anchor->GetFormID());
+        logger::info("GKNative: registered labyrinth (anchor {:08X}).", a_anchor->GetFormID());
     }
 
     std::int32_t ScanAllLabyrinths(RE::StaticFunctionTag*) {
         // Global one-shot sweep across all registered labyrinths; finds persistent
         // resources without their cells being loaded. GK::ScanAllForms locks itself.
         return GK::ScanAllForms();
-    }
-
-    RE::TESObjectREFR* GetLabyrinthAnchor(RE::StaticFunctionTag*, RE::BGSKeyword* a_labyrinth) {
-        if (!a_labyrinth) {
-            return nullptr;
-        }
-        auto* state = GK::GameState::GetSingleton();
-        auto lock = state->Lock();
-        return AsRef(state->Labyrinths().AnchorOf(a_labyrinth->GetFormID()));
     }
 
     // --- cells ----------------------------------------------------------------
@@ -223,14 +208,14 @@ namespace {
         }
     }
 
-    RE::BGSKeyword* GetCellLabyrinth(RE::StaticFunctionTag*, std::int32_t a_cell) {
+    RE::TESObjectREFR* GetCellLabyrinth(RE::StaticFunctionTag*, std::int32_t a_cell) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         const auto* cell = state->Resources().CellPool().FindByHandle(a_cell);
-        return cell ? AsKeyword(cell->labyrinth) : nullptr;
+        return cell ? AsRef(cell->labyrinth) : nullptr;
     }
 
-    std::vector<std::int32_t> GetCells(RE::StaticFunctionTag*, RE::BGSKeyword* a_labyrinth) {
+    std::vector<std::int32_t> GetCells(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth) {
         if (!a_labyrinth) {
             return {};
         }
@@ -266,14 +251,14 @@ namespace {
         }
     }
 
-    RE::BGSKeyword* GetMarkerLabyrinth(RE::StaticFunctionTag*, std::int32_t a_marker) {
+    RE::TESObjectREFR* GetMarkerLabyrinth(RE::StaticFunctionTag*, std::int32_t a_marker) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         const auto* marker = state->Resources().MarkerPool().FindByHandle(a_marker);
-        return marker ? AsKeyword(marker->labyrinth) : nullptr;
+        return marker ? AsRef(marker->labyrinth) : nullptr;
     }
 
-    std::vector<std::int32_t> GetMarkers(RE::StaticFunctionTag*, RE::BGSKeyword* a_labyrinth) {
+    std::vector<std::int32_t> GetMarkers(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth) {
         if (!a_labyrinth) {
             return {};
         }
@@ -291,14 +276,14 @@ namespace {
         return furniture ? AsRef(furniture->ref) : nullptr;
     }
 
-    RE::BGSKeyword* GetFurnitureLabyrinth(RE::StaticFunctionTag*, std::int32_t a_furniture) {
+    RE::TESObjectREFR* GetFurnitureLabyrinth(RE::StaticFunctionTag*, std::int32_t a_furniture) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         const auto* furniture = state->Resources().FurniturePool().FindByHandle(a_furniture);
-        return furniture ? AsKeyword(furniture->labyrinth) : nullptr;
+        return furniture ? AsRef(furniture->labyrinth) : nullptr;
     }
 
-    std::vector<std::int32_t> GetFurnitures(RE::StaticFunctionTag*, RE::BGSKeyword* a_labyrinth) {
+    std::vector<std::int32_t> GetFurnitures(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth) {
         if (!a_labyrinth) {
             return {};
         }
@@ -332,7 +317,6 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("ConfigureKeywords", kClass, ConfigureKeywords);
         a_vm->RegisterFunction("RegisterLabyrinth", kClass, RegisterLabyrinth);
         a_vm->RegisterFunction("ScanAllLabyrinths", kClass, ScanAllLabyrinths);
-        a_vm->RegisterFunction("GetLabyrinthAnchor", kClass, GetLabyrinthAnchor);
 
         a_vm->RegisterFunction("GetCellDoor", kClass, GetCellDoor);
         a_vm->RegisterFunction("GetCellInMarker", kClass, GetCellInMarker);

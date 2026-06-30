@@ -58,10 +58,10 @@ Function ForgetActor(Actor akActor) Global Native
 ; session (the pointers aren't persisted; re-supply them after each load).
 Function ConfigureKeywords(Keyword akCellDoor, Keyword akPatrolMarker, Keyword akFurniture, Keyword akInMarker, Keyword akOutMarker) Global Native
 
-; Register a labyrinth: its identifying Keyword plus the anchor XMarker that
-; gives it a position. Only stores the anchor's FormID, so the anchor's cell
-; need not be loaded.
-Function RegisterLabyrinth(Keyword akLabyrinth, ObjectReference akAnchor) Global Native
+; Register a labyrinth, identified directly by its anchor XMarker reference. Only
+; stores the anchor's FormID, so the anchor's cell need not be loaded. The same
+; anchor reference is what you pass to GetCells / GetMarkers / GetFurnitures.
+Function RegisterLabyrinth(ObjectReference akAnchor) Global Native
 
 ; One-shot global discovery across ALL registered labyrinths. Sweeps the whole
 ; form table, so it finds resources WITHOUT their cells being loaded -- but only
@@ -69,15 +69,12 @@ Function RegisterLabyrinth(Keyword akLabyrinth, ObjectReference akAnchor) Global
 ; persistent in the CK). Call once after registration. Returns total matched.
 Int Function ScanAllLabyrinths() Global Native
 
-; The anchor reference a labyrinth was registered with (None if unregistered).
-ObjectReference Function GetLabyrinthAnchor(Keyword akLabyrinth) Global Native
-
 ; =============================================================================
-; Cells  (aiCell is a cell handle)
+; Cells  (aiCell is a cell handle; akLabyrinth is the anchor reference)
 ; =============================================================================
 
-; All cell handles belonging to a labyrinth.
-Int[] Function GetCells(Keyword akLabyrinth) Global Native
+; All cell handles belonging to a labyrinth (its anchor reference).
+Int[] Function GetCells(ObjectReference akLabyrinth) Global Native
 
 ObjectReference Function GetCellDoor(Int aiCell) Global Native
 ObjectReference Function GetCellInMarker(Int aiCell) Global Native
@@ -86,28 +83,28 @@ ObjectReference Function GetCellOutMarker(Int aiCell) Global Native
 Int Function GetCellMaxOccupants(Int aiCell) Global Native
 Function SetCellMaxOccupants(Int aiCell, Int aiMax) Global Native
 
-; The labyrinth keyword a cell belongs to (None if the handle is unknown).
-Keyword Function GetCellLabyrinth(Int aiCell) Global Native
+; The labyrinth (anchor reference) a cell belongs to (None if handle unknown).
+ObjectReference Function GetCellLabyrinth(Int aiCell) Global Native
 
 ; =============================================================================
 ; Patrol markers  (aiMarker is a marker handle)
 ; =============================================================================
 
-Int[] Function GetMarkers(Keyword akLabyrinth) Global Native
+Int[] Function GetMarkers(ObjectReference akLabyrinth) Global Native
 
 ObjectReference Function GetMarkerRef(Int aiMarker) Global Native
 
 Int Function GetMarkerMaxOccupants(Int aiMarker) Global Native
 Function SetMarkerMaxOccupants(Int aiMarker, Int aiMax) Global Native
 
-Keyword Function GetMarkerLabyrinth(Int aiMarker) Global Native
+ObjectReference Function GetMarkerLabyrinth(Int aiMarker) Global Native
 
 ; =============================================================================
 ; Furniture  (aiFurniture is a furniture handle; always single-occupant)
 ; =============================================================================
 
-Int[] Function GetFurnitures(Keyword akLabyrinth) Global Native
+Int[] Function GetFurnitures(ObjectReference akLabyrinth) Global Native
 
 ObjectReference Function GetFurnitureRef(Int aiFurniture) Global Native
 
-Keyword Function GetFurnitureLabyrinth(Int aiFurniture) Global Native
+ObjectReference Function GetFurnitureLabyrinth(Int aiFurniture) Global Native

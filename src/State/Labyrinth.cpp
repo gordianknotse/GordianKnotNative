@@ -5,9 +5,9 @@
 // =============================================================================
 // Discovery (Encoding B). A resource reference is identified by a type linked-ref
 // (GK_CellDoor / GK_PatrolMarker / GK_Furniture) whose target is a registered
-// labyrinth's anchor XMarker; that target both classifies the resource and tells
-// us which labyrinth it belongs to. A cell door additionally resolves its in/out
-// markers via GK_InMarker / GK_OutMarker.
+// labyrinth's anchor XMarker; that target both classifies the resource and (being
+// the labyrinth's identity) tells us which labyrinth it belongs to. A cell door
+// additionally resolves its in/out markers via GK_InMarker / GK_OutMarker.
 //
 // Discovery is a single global sweep of the instantiated-form table (ScanAllForms):
 // it finds every PERSISTENT resource reference without requiring its cell to be
@@ -17,6 +17,42 @@
 
 namespace GK {
     namespace {
+        // Contract with the Papyrus mod: a cell door may carry a script of this class
+        // exposing an Int property of this name to set the cell's capacity from the CK
+        // (no runtime call needed). Absent script / wrong class / missing or non-int
+        // property all fall back to the default capacity.
+        constexpr const char* kDoorScriptClass = "GordianKnotCellDoor";
+        constexpr const char* kMaxOccupantsProperty = "maxOccupants";
+
+        std::uint32_t ReadDoorMaxOccupants(RE::TESObjectREFR& a_door, std::uint32_t a_default) {
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            if (!vm) {
+                return a_default;
+            }
+            auto* policy = vm->GetObjectHandlePolicy();
+            if (!policy) {
+                return a_default;
+            }
+
+            const auto handle = policy->GetHandleForObject(a_door.GetFormType(), &a_door);
+            if (handle == policy->EmptyHandle()) {
+                return a_default;  // no VM handle for this ref
+            }
+
+            RE::BSTSmartPointer<RE::BSScript::Object> object;
+            if (!vm->FindBoundObject(handle, kDoorScriptClass, object) || !object) {
+                return a_default;  // door has no GordianKnotCellDoor script attached
+            }
+
+            const auto* var = object->GetProperty(kMaxOccupantsProperty);
+            if (!var || !var->IsInt()) {
+                return a_default;  // property missing or not an Int
+            }
+
+            const auto value = var->GetSInt();
+            return value > 0 ? static_cast<std::uint32_t>(value) : a_default;
+        }
+
         void UpsertCell(ResourceRegistry& a_reg, RE::TESObjectREFR& a_door, RE::FormID a_labyrinth,
                         const ResourceKeywords& a_kw) {
             const RE::FormID doorID = a_door.GetFormID();
@@ -30,16 +66,21 @@ namespace GK {
                 outID = m->GetFormID();
             }
 
+            // Capacity is CK config (read off the door's script), so refresh it on
+            // every discovery; occupants/handle are runtime state and are preserved.
+            const std::uint32_t maxOcc = ReadDoorMaxOccupants(a_door, kDefaultCellMaxOccupants);
+
             if (auto* existing = a_reg.CellPool().FindByKey(doorID)) {
-                // Refresh topology; preserve handle, capacity, and occupants.
+                // Refresh topology + capacity; preserve handle and occupants.
                 existing->labyrinth = a_labyrinth;
+                existing->maxOccupants = maxOcc;
                 existing->inMarker = inID;
                 existing->outMarker = outID;
             } else {
                 Cell cell;
                 cell.handle = a_reg.NextHandle();
                 cell.labyrinth = a_labyrinth;
-                cell.maxOccupants = kDefaultCellMaxOccupants;
+                cell.maxOccupants = maxOcc;
                 cell.door = doorID;
                 cell.inMarker = inID;
                 cell.outMarker = outID;
@@ -76,25 +117,26 @@ namespace GK {
         }
 
         // Classify a single reference against ALL registered labyrinths: if one of
-        // its type linked-refs targets a known anchor, upsert it under that labyrinth
-        // and return true. The caller holds the GameState lock.
+        // its type linked-refs targets a registered anchor, upsert it under that
+        // labyrinth (keyed by the anchor's FormID) and return true. The caller holds
+        // the GameState lock.
         bool ClassifyRef(RE::TESObjectREFR& a_ref, const ResourceKeywords& a_kw, const LabyrinthRegistry& a_labs,
                          ResourceRegistry& a_reg) {
             if (const auto* tgt = a_ref.GetLinkedRef(a_kw.cellDoor)) {
-                if (const auto labKw = a_labs.KeywordForAnchor(tgt->GetFormID())) {
-                    UpsertCell(a_reg, a_ref, labKw, a_kw);
+                if (a_labs.Contains(tgt->GetFormID())) {
+                    UpsertCell(a_reg, a_ref, tgt->GetFormID(), a_kw);
                     return true;
                 }
             }
             if (const auto* tgt = a_ref.GetLinkedRef(a_kw.patrolMarker)) {
-                if (const auto labKw = a_labs.KeywordForAnchor(tgt->GetFormID())) {
-                    UpsertMarker(a_reg, a_ref, labKw);
+                if (a_labs.Contains(tgt->GetFormID())) {
+                    UpsertMarker(a_reg, a_ref, tgt->GetFormID());
                     return true;
                 }
             }
             if (const auto* tgt = a_ref.GetLinkedRef(a_kw.furniture)) {
-                if (const auto labKw = a_labs.KeywordForAnchor(tgt->GetFormID())) {
-                    UpsertFurniture(a_reg, a_ref, labKw);
+                if (a_labs.Contains(tgt->GetFormID())) {
+                    UpsertFurniture(a_reg, a_ref, tgt->GetFormID());
                     return true;
                 }
             }

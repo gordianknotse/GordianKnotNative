@@ -30,7 +30,7 @@ namespace GK {
     // the primary REFR FormID used as the discovery/dedup key.
     struct OccupiableResource {
         Handle handle = kInvalidHandle;
-        RE::FormID labyrinth = 0;           // labyrinth keyword FormID
+        RE::FormID labyrinth = 0;           // labyrinth anchor REFR FormID
         std::uint32_t maxOccupants = 1;
         std::vector<RE::FormID> occupants;  // actor FormIDs (filled in Phase 4)
 
