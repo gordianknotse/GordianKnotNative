@@ -4,6 +4,10 @@
     "version-string": "0.1.0",
     "description": "Gordian Knot — native SKSE layer (equip/combat events, co-save serialization, Papyrus surface).",
     "dependencies": [
-        "commonlibsse-ng"
+        "commonlibsse-ng",
+        {
+            "name": "imgui",
+            "features": ["dx11-binding"]
+        }
     ]
 }

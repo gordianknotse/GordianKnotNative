@@ -3,6 +3,7 @@
 #include "Events/EquipEventSink.h"
 #include "Papyrus/GKNative.h"
 #include "Serialization/Serialization.h"
+#include "UI/DebugOverlay.h"
 
 // =============================================================================
 // Gordian Knot — native SKSE entry point.
@@ -72,6 +73,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
 
     // Register SKSE co-save serialization (Save/Load/Revert) for native state.
     GK::Serialization::Install();
+
+    // Debug overlay hooks (D3D init / present / input) must be written before the
+    // game initializes its renderer, i.e. here at plugin load.
+    GK::UI::Install();
 
     return true;
 }
