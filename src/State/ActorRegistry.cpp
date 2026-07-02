@@ -6,7 +6,10 @@ namespace GK {
     }
 
     void ActorRegistry::RemoveGlobalRole(RE::FormID a_actor, std::uint32_t a_role) {
-        GetOrCreate(a_actor).globalRoles &= ~a_role;  // clearing also ensures the actor is tracked
+        const auto it = _records.find(a_actor);
+        if (it != _records.end()) {  // clearing never tracks: untracked actor is a no-op
+            it->second.globalRoles &= ~a_role;
+        }
     }
 
     std::uint32_t ActorRegistry::GetGlobalRoles(RE::FormID a_actor) const {
@@ -25,11 +28,14 @@ namespace GK {
     }
 
     void ActorRegistry::SetRoles(RE::FormID a_actor, RE::FormID a_lab, std::uint32_t a_roles) {
-        auto& rec = GetOrCreate(a_actor);
         if (a_roles == Role::kNone) {
-            rec.rolesByLab.erase(a_lab);  // clearing every role drops the association
+            // Clearing every role drops the association; never tracks an untracked actor.
+            const auto it = _records.find(a_actor);
+            if (it != _records.end()) {
+                it->second.rolesByLab.erase(a_lab);
+            }
         } else {
-            rec.rolesByLab[a_lab] = a_roles;
+            GetOrCreate(a_actor).rolesByLab[a_lab] = a_roles;
         }
     }
 
@@ -41,8 +47,11 @@ namespace GK {
     }
 
     void ActorRegistry::RemoveRole(RE::FormID a_actor, RE::FormID a_lab, std::uint32_t a_role) {
-        auto& rec = GetOrCreate(a_actor);  // clearing a role also ensures the actor is tracked
-        auto& byLab = rec.rolesByLab;
+        const auto it = _records.find(a_actor);
+        if (it == _records.end()) {
+            return;  // clearing never tracks: untracked actor is a no-op
+        }
+        auto& byLab = it->second.rolesByLab;
         const auto lit = byLab.find(a_lab);
         if (lit == byLab.end()) {
             return;

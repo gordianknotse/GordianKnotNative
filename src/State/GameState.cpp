@@ -11,6 +11,7 @@ namespace GK {
         _actors.Clear();
         _labyrinths.Clear();
         _resources.Clear();
+        _aliasReservations.clear();
         // _keywords intentionally retained (live session config, not save state).
     }
 }

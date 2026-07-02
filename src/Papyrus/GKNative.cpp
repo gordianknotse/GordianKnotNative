@@ -45,42 +45,179 @@ namespace {
         return out;
     }
 
+    // --- alias pool helpers -----------------------------------------------------
+    //
+    // A tracked actor needs two things: persistence (survive unload / cell reset /
+    // the form-table scan) and its per-NPC driver script. Scan-discovered actors
+    // (wardens) get both from the CK (persistent + script attached on the base).
+    // Every OTHER actor gets both from being filled into a pool of ReferenceAliases
+    // (GkNpcAlias000, 001, ...) authored on the quest supplied via
+    // ConfigureAliasQuest -- so even an already-persistent ref goes through the
+    // pool, for the script. The fill itself is the engine's own ForceRefTo,
+    // dispatched through the Papyrus VM; a reservation covers the async window so
+    // two threads can't be handed the same slot. It is consumed once the alias is
+    // seen filled, and expires if the fill never lands.
+
+    constexpr std::string_view kAliasPoolPrefix = "GkNpc"sv;
+    constexpr auto kAliasReservationTTL = std::chrono::seconds(10);
+
+    bool IsPoolAlias(const RE::BGSBaseAlias& a_alias) {
+        const char* name = a_alias.aliasName.c_str();
+        return name && _strnicmp(name, kAliasPoolPrefix.data(), kAliasPoolPrefix.size()) == 0;
+    }
+
+    std::uint64_t AliasKey(const RE::TESQuest& a_quest, std::uint32_t a_aliasID) {
+        return (static_cast<std::uint64_t>(a_quest.GetFormID()) << 32) | a_aliasID;
+    }
+
+    // The pool alias currently holding a_actor, or nullptr.
+    RE::BGSRefAlias* FindPoolAliasHolding(RE::TESQuest& a_quest, const RE::Actor& a_actor) {
+        const RE::BSReadLockGuard aliasGuard{a_quest.aliasAccessLock};
+        for (auto* base : a_quest.aliases) {
+            if (!base || !IsPoolAlias(*base)) {
+                continue;
+            }
+            auto* refAlias = skyrim_cast<RE::BGSRefAlias*>(base);
+            if (refAlias && refAlias->GetActorReference() == &a_actor) {
+                return refAlias;
+            }
+        }
+        return nullptr;
+    }
+
+    // Find a free pool alias and reserve it (caller holds the GameState lock).
+    // Returns nullptr if the pool is exhausted.
+    RE::BGSRefAlias* ReserveFreePoolAlias(GK::GameState& a_state, RE::TESQuest& a_quest) {
+        auto& reservations = a_state.AliasReservations();
+        const auto now = std::chrono::steady_clock::now();
+
+        const RE::BSReadLockGuard aliasGuard{a_quest.aliasAccessLock};
+        for (auto* base : a_quest.aliases) {
+            if (!base || !IsPoolAlias(*base)) {
+                continue;
+            }
+            auto* refAlias = skyrim_cast<RE::BGSRefAlias*>(base);
+            if (!refAlias) {
+                continue;  // pool-named but not a ReferenceAlias; ignore
+            }
+            const auto key = AliasKey(a_quest, base->aliasID);
+            if (refAlias->GetReference()) {
+                reservations.erase(key);  // filled: its reservation (if any) is consumed
+                continue;
+            }
+            if (auto it = reservations.find(key); it != reservations.end()) {
+                if (now < it->second) {
+                    continue;  // actively reserved by another caller
+                }
+                reservations.erase(it);  // expired: the fill never landed
+            }
+            reservations.emplace(key, now + kAliasReservationTTL);
+            return refAlias;
+        }
+        return nullptr;  // pool exhausted
+    }
+
+    // Queue a Papyrus call on a pool alias (e.g. ForceRefTo/Clear) through the VM.
+    // Takes ownership of a_args. Returns false if the VM couldn't dispatch.
+    bool DispatchAliasCall(RE::BGSRefAlias& a_alias, const char* a_fn, RE::BSScript::IFunctionArguments* a_args) {
+        const std::unique_ptr<RE::BSScript::IFunctionArguments> args{a_args};
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        auto* policy = vm ? vm->GetObjectHandlePolicy() : nullptr;
+        if (!policy) {
+            return false;
+        }
+        const auto handle = policy->GetHandleForObject(a_alias.GetVMTypeID(), &a_alias);
+        if (handle == policy->EmptyHandle()) {
+            return false;
+        }
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+        return vm->DispatchMethodCall2(handle, "ReferenceAlias", a_fn, args.get(), callback);
+    }
+
+    // Gate for every ADDING mutator: a new actor goes into a free pool alias
+    // (dispatching the engine's ForceRefTo), which both makes it persistent AND
+    // binds its driver script. Only already-tracked actors skip it -- i.e. the
+    // scan-discovered ones, whose script + persistence are CK-authored. A merely
+    // persistent ref still needs the alias for the script. False -> do NOT track.
+    // Caller holds the GameState lock.
+    bool EnsureTrackable(GK::GameState& a_state, RE::Actor& a_actor) {
+        const auto id = a_actor.GetFormID();
+        if (a_state.Actors().Records().contains(id)) {
+            return true;  // already tracked (covers scan-discovered wardens)
+        }
+        auto* quest = a_state.AliasQuest();
+        if (!quest) {
+            logger::warn("GKNative: actor {:08X} not tracked (non-persistent and no alias quest configured).", id);
+            return false;
+        }
+        auto* alias = ReserveFreePoolAlias(a_state, *quest);
+        if (!alias) {
+            logger::warn("GKNative: actor {:08X} not tracked (alias pool exhausted).", id);
+            return false;
+        }
+        if (!DispatchAliasCall(*alias, "ForceRefTo",
+                               RE::MakeFunctionArguments(static_cast<RE::TESObjectREFR*>(&a_actor)))) {
+            a_state.AliasReservations().erase(AliasKey(*quest, alias->aliasID));  // free the slot again
+            logger::error("GKNative: actor {:08X} not tracked (ForceRefTo dispatch failed).", id);
+            return false;
+        }
+        logger::info("GKNative: actor {:08X} -> pool alias {} ('{}').", id, alias->aliasID, alias->aliasName.c_str());
+        return true;
+    }
+
     // --- tracking + roles -----------------------------------------------------
     // Roles come in two kinds (see GK::Role): GLOBAL (Wanderer) live on the actor
     // and take no labyrinth; SCOPED (Warden/Prisoner) are an association with one
     // labyrinth (its anchor). The per-labyrinth generic functions below operate on
     // SCOPED bits only -- any global bit in the passed mask is ignored (use the
-    // dedicated Wanderer functions for that). Every role mutator ensures the actor
-    // is tracked, so giving (or clearing) any role also adds the actor.
+    // dedicated Wanderer functions for that). ADDING mutators track the actor first
+    // (via EnsureTrackable) and return false if no pool alias could take it; CLEARING
+    // mutators never track -- clearing on an untracked actor is a no-op.
 
-    void AddActor(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+    bool AddActor(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
-            return;
+            return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (!EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
         state->Actors().AddActor(a_actor->GetFormID());
+        return true;
     }
 
-    void SetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
+    bool SetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
                        std::int32_t a_roles) {
         if (!a_actor || !a_labyrinth) {
-            return;
+            return false;
         }
+        const auto masked = static_cast<std::uint32_t>(a_roles) & GK::Role::kScopedMask;
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().SetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID(),
-                                 static_cast<std::uint32_t>(a_roles) & GK::Role::kScopedMask);
+        if (masked == GK::Role::kNone) {  // pure clear: never tracks, always "succeeds"
+            state->Actors().SetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID(), masked);
+            return true;
+        }
+        if (!EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
+        state->Actors().SetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID(), masked);
+        return true;
     }
 
-    void AddActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::int32_t a_role) {
+    bool AddActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::int32_t a_role) {
         if (!a_actor || !a_labyrinth) {
-            return;
+            return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (!EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
         state->Actors().AddRole(a_actor->GetFormID(), a_labyrinth->GetFormID(),
                                 static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask);
+        return true;
     }
 
     void RemoveActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
@@ -139,13 +276,17 @@ namespace {
     }
 
     // Per-role set/clear convenience wrappers. Scoped variants take the labyrinth.
-    void SetRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
+    bool SetRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
         if (!a_actor || !a_labyrinth) {
-            return;
+            return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (!EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
         state->Actors().AddRole(a_actor->GetFormID(), a_labyrinth->GetFormID(), a_flag);
+        return true;
     }
 
     void ClearRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
@@ -158,13 +299,17 @@ namespace {
     }
 
     // Wanderer is global -> no labyrinth.
-    void SetWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+    bool SetWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
-            return;
+            return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (!EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
         state->Actors().AddGlobalRole(a_actor->GetFormID(), GK::Role::kWanderer);
+        return true;
     }
     void ClearWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
@@ -174,14 +319,14 @@ namespace {
         auto lock = state->Lock();
         state->Actors().RemoveGlobalRole(a_actor->GetFormID(), GK::Role::kWanderer);
     }
-    void SetWarden(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
-        SetRoleFlag(a_actor, a_labyrinth, GK::Role::kWarden);
+    bool SetWarden(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        return SetRoleFlag(a_actor, a_labyrinth, GK::Role::kWarden);
     }
     void ClearWarden(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
         ClearRoleFlag(a_actor, a_labyrinth, GK::Role::kWarden);
     }
-    void SetPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
-        SetRoleFlag(a_actor, a_labyrinth, GK::Role::kPrisoner);
+    bool SetPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        return SetRoleFlag(a_actor, a_labyrinth, GK::Role::kPrisoner);
     }
     void ClearPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
         ClearRoleFlag(a_actor, a_labyrinth, GK::Role::kPrisoner);
@@ -195,13 +340,17 @@ namespace {
 
     // --- status ---------------------------------------------------------------
 
-    void SetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_status) {
+    bool SetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_status) {
         if (!a_actor) {
-            return;
+            return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (!EnsureTrackable(*state, *a_actor)) {  // status on an untracked actor is an adder
+            return false;
+        }
         state->Actors().SetStatus(a_actor->GetFormID(), a_status);
+        return true;
     }
 
     std::int32_t GetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor) {
@@ -279,6 +428,12 @@ namespace {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         state->Actors().Forget(a_actor->GetFormID());
+        // Release the actor's pool alias (if it holds one) so the slot frees up.
+        if (auto* quest = state->AliasQuest()) {
+            if (auto* alias = FindPoolAliasHolding(*quest, *a_actor)) {
+                DispatchAliasCall(*alias, "Clear", RE::MakeFunctionArguments());
+            }
+        }
     }
 
     // --- config / lifecycle ---------------------------------------------------
@@ -324,6 +479,56 @@ namespace {
     // finds while their cell is unloaded. Diagnostic: no game state, no lock needed.
     bool IsPersistent(RE::StaticFunctionTag*, RE::TESObjectREFR* a_ref) {
         return a_ref && (a_ref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kPersistent) != 0;
+    }
+
+    // --- alias pool (Papyrus-facing; the allocation itself is EnsureTrackable) ---
+
+    // Supply the quest carrying the GkNpc pool aliases. Session config like
+    // ConfigureKeywords: a live pointer, re-supplied by Papyrus after each load.
+    void ConfigureAliasQuest(RE::StaticFunctionTag*, RE::TESQuest* a_quest) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->AliasQuest() = a_quest;
+        if (a_quest) {
+            logger::info("GKNative: alias pool quest configured ({:08X}).", a_quest->GetFormID());
+        } else {
+            logger::warn("GKNative: ConfigureAliasQuest received None; pool disabled.");
+        }
+    }
+
+    std::int32_t FindAliasHolding(RE::StaticFunctionTag*, RE::TESQuest* a_quest, RE::Actor* a_actor) {
+        if (!a_quest || !a_actor) {
+            return -1;
+        }
+        const auto* alias = FindPoolAliasHolding(*a_quest, *a_actor);
+        return alias ? static_cast<std::int32_t>(alias->aliasID) : -1;
+    }
+
+    std::int32_t CountFreeAliases(RE::StaticFunctionTag*, RE::TESQuest* a_quest) {
+        if (!a_quest) {
+            return 0;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto& reservations = state->AliasReservations();
+        const auto now = std::chrono::steady_clock::now();
+
+        std::int32_t free = 0;
+        const RE::BSReadLockGuard aliasGuard{a_quest->aliasAccessLock};
+        for (const auto* base : a_quest->aliases) {
+            if (!base || !IsPoolAlias(*base)) {
+                continue;
+            }
+            const auto* refAlias = skyrim_cast<const RE::BGSRefAlias*>(base);
+            if (!refAlias || refAlias->GetReference()) {
+                continue;
+            }
+            const auto it = reservations.find(AliasKey(*a_quest, base->aliasID));
+            if (it == reservations.end() || now >= it->second) {
+                ++free;  // empty and not actively reserved
+            }
+        }
+        return free;
     }
 
     // --- cells ----------------------------------------------------------------
@@ -495,6 +700,10 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("RegisterLabyrinth", kClass, RegisterLabyrinth);
         a_vm->RegisterFunction("ScanAllLabyrinths", kClass, ScanAllLabyrinths);
         a_vm->RegisterFunction("IsPersistent", kClass, IsPersistent);
+
+        a_vm->RegisterFunction("ConfigureAliasQuest", kClass, ConfigureAliasQuest);
+        a_vm->RegisterFunction("FindAliasHolding", kClass, FindAliasHolding);
+        a_vm->RegisterFunction("CountFreeAliases", kClass, CountFreeAliases);
 
         a_vm->RegisterFunction("GetCellDoor", kClass, GetCellDoor);
         a_vm->RegisterFunction("GetCellInMarker", kClass, GetCellInMarker);

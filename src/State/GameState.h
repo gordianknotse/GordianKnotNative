@@ -4,7 +4,10 @@
 #include "State/Labyrinth.h"
 #include "State/ResourceRegistry.h"
 
+#include <chrono>
+#include <cstdint>
 #include <mutex>
+#include <unordered_map>
 
 namespace GK {
     // Central owner of all native runtime state. A single recursive mutex guards
@@ -29,6 +32,17 @@ namespace GK {
         [[nodiscard]] ResourceRegistry& Resources() { return _resources; }
         [[nodiscard]] ResourceKeywords& Keywords() { return _keywords; }
 
+        // The quest carrying the GkNpc alias pool. Session config like _keywords (a live
+        // form pointer re-supplied by Papyrus each load); never serialized, not Reset.
+        [[nodiscard]] RE::TESQuest*& AliasQuest() { return _aliasQuest; }
+
+        // Transient alias-pool reservations: (quest FormID << 32 | alias ID) -> expiry.
+        // Guards the scan->ForceRefTo window so two Papyrus threads aren't handed the
+        // same free alias. Never serialized; entries expire or are consumed on fill.
+        [[nodiscard]] std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>& AliasReservations() {
+            return _aliasReservations;
+        }
+
         // Wipes per-save state (actors, labyrinths, resources). Called from the SKSE
         // Revert callback before a save is loaded. The keyword config is NOT cleared:
         // those are live session pointers re-supplied by Papyrus, independent of any
@@ -49,5 +63,7 @@ namespace GK {
         LabyrinthRegistry _labyrinths;
         ResourceRegistry _resources;
         ResourceKeywords _keywords;
+        RE::TESQuest* _aliasQuest = nullptr;
+        std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> _aliasReservations;
     };
 }

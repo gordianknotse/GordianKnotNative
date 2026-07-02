@@ -25,8 +25,17 @@ Scriptname GordianKnotNative Hidden
   RemoveActorRole / GetActorRoles) operate on SCOPED bits only; a global bit in
   the mask is ignored -- use the Wanderer functions for that.
 
-  Any role mutator (including the Set/Clear helpers) also TRACKS the actor if it
-  wasn't already; AddActor(akActor) tracks one with no roles up front.
+  -- Tracking & persistence --
+  A tracked actor needs persistence (to survive unload / cell reset / discovery)
+  AND its per-NPC driver script. Scan-discovered actors (wardens) get both from
+  the CK and are tracked directly by ScanAllLabyrinths. Every OTHER actor gets
+  both by being placed into a free GkNpc pool alias on the quest given to
+  ConfigureAliasQuest -- every ADDING mutator (AddActor, Set*/Add* role,
+  SetActorStatus) does this automatically for a new actor, even one that is
+  already persistent (it still needs the script). If no slot is free (or no alias
+  quest is configured) the mutator returns FALSE and the actor is NOT tracked.
+  CLEARING mutators (Remove*/Clear*) never track: clearing a role on an untracked
+  actor is a no-op.
 
   Papyrus has no bitwise operators. Because the flags are distinct bits you can
   combine them by ADDING (1 + 4 = 5), or use SKSE's Math.LogicalOr / LogicalAnd
@@ -43,32 +52,37 @@ Scriptname GordianKnotNative Hidden
 ; Actors  (the player and tracked NPCs are handled identically here)
 ; =============================================================================
 
-; Start tracking akActor with no roles (idle). No-op if already tracked. Every role
-; mutator below also tracks the actor, so this is only needed to track one up front.
-Function AddActor(Actor akActor) Global Native
+; Start tracking akActor with no roles (idle). No-op (True) if already tracked.
+; Like every adding mutator below, returns False if the actor couldn't be made
+; persistent (see the header) -- in that case it is not tracked at all.
+Bool Function AddActor(Actor akActor) Global Native
 
 ; --- Scoped roles (Warden / Prisoner): take the labyrinth anchor ---
 
 ; Replace the actor's SCOPED role bitmask in akLabyrinth outright (Warden/Prisoner
-; bits only; global bits are ignored). Passing 0 drops the association with it.
-Function SetActorRoles(Actor akActor, ObjectReference akLabyrinth, Int aiRoles) Global Native
+; bits only; global bits are ignored). Passing 0 drops the association with it
+; (a pure clear: never tracks, always True). False if the actor can't be tracked.
+Bool Function SetActorRoles(Actor akActor, ObjectReference akLabyrinth, Int aiRoles) Global Native
 
 ; OR a scoped role flag into the actor's mask for akLabyrinth (global bits ignored).
-Function AddActorRole(Actor akActor, ObjectReference akLabyrinth, Int aiRole) Global Native
+; False if the actor can't be tracked.
+Bool Function AddActorRole(Actor akActor, ObjectReference akLabyrinth, Int aiRole) Global Native
 
-; Clear a scoped role flag from the actor's mask for akLabyrinth (other labyrinths untouched).
+; Clear a scoped role flag from the actor's mask for akLabyrinth (other labyrinths
+; untouched). Clearing never tracks an untracked actor.
 Function RemoveActorRole(Actor akActor, ObjectReference akLabyrinth, Int aiRole) Global Native
 
 ; The actor's scoped role bitmask in akLabyrinth (0 if it holds no role there).
 Int Function GetActorRoles(Actor akActor, ObjectReference akLabyrinth) Global Native
 
 ; Scoped convenience tests / set / clear, for one labyrinth. Other roles -- in this
-; and every other labyrinth -- are left intact.
+; and every other labyrinth -- are left intact. Set* returns False if the actor
+; can't be tracked (see the header).
 Bool Function IsWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
 Bool Function IsPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
-Function SetWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
+Bool Function SetWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
 Function ClearWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
-Function SetPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
+Bool Function SetPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 Function ClearPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 
 ; --- Global roles (Wanderer): no labyrinth ---
@@ -77,7 +91,8 @@ Function ClearPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 Int Function GetActorGlobalRoles(Actor akActor) Global Native
 
 Bool Function IsWanderer(Actor akActor) Global Native
-Function SetWanderer(Actor akActor) Global Native
+; False if the actor can't be tracked (see the header).
+Bool Function SetWanderer(Actor akActor) Global Native
 Function ClearWanderer(Actor akActor) Global Native
 
 ; Role-flag constant getters (single source of truth in the native plugin). Use
@@ -87,8 +102,9 @@ Int Function RoleWarden() Global Native
 Int Function RolePrisoner() Global Native
 
 ; Set / get an actor's status code (0 = Idle; other values are Papyrus-defined).
-; Status is global to the actor, not scoped to a labyrinth.
-Function SetActorStatus(Actor akActor, Int aiStatus) Global Native
+; Status is global to the actor, not scoped to a labyrinth. Setting status on an
+; untracked actor is an ADDER: False if the actor can't be tracked (see the header).
+Bool Function SetActorStatus(Actor akActor, Int aiStatus) Global Native
 Int Function GetActorStatus(Actor akActor) Global Native
 
 ; Tracked actors whose SCOPED role mask in akLabyrinth matches ANY bit in aiRoleMask.
@@ -111,6 +127,7 @@ Bool Function HasRoleAnywhere(Actor akActor, Int aiRoleMask) Global Native
 Actor[] Function GetActorsByStatus(Int aiStatus) Global Native
 
 ; Drop an actor from native tracking entirely (all labyrinth associations + status).
+; Also releases the GkNpc pool alias holding it, if any (freeing the slot).
 Function ForgetActor(Actor akActor) Global Native
 
 ; =============================================================================
@@ -140,6 +157,24 @@ Int Function ScanAllLabyrinths() Global Native
 ; and is the only kind ScanAllLabyrinths can find while its cell is unloaded). Diagnostic
 ; helper -- reads the reference's persistent flag directly from the engine.
 Bool Function IsPersistent(ObjectReference akRef) Global Native
+
+; =============================================================================
+; Alias pool  (per-NPC driver aliases, authored on one quest as GkNpcAlias000...)
+; =============================================================================
+; Pool aliases are the ReferenceAliases on the configured quest whose name starts
+; with "GkNpc". The native layer fills one automatically whenever an ADDING
+; mutator needs to track a non-persistent actor (see the header), and releases it
+; on ForgetActor -- there is no manual assign/free.
+
+; Supply the quest carrying the pool aliases. Call once per session alongside
+; ConfigureKeywords (a live pointer, re-supplied after each game load). Without
+; it, adders fail (return False) for any actor that isn't already persistent.
+Function ConfigureAliasQuest(Quest akQuest) Global Native
+
+; Diagnostics: the alias ID of the pool alias currently holding akActor (-1 if
+; none), and how many pool aliases are currently empty and unreserved.
+Int Function FindAliasHolding(Quest akQuest, Actor akActor) Global Native
+Int Function CountFreeAliases(Quest akQuest) Global Native
 
 ; =============================================================================
 ; Cells  (aiCell is a cell handle; akLabyrinth is the anchor reference)

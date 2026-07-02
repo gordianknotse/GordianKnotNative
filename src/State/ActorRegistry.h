@@ -14,9 +14,10 @@ namespace GK {
     // lock.
     class ActorRegistry {
     public:
-        // Ensure a_actor is tracked (no roles, idle status) if it isn't already. Every
-        // role mutator below also does this, so an actor becomes tracked the moment it
-        // is given (or has cleared) any role.
+        // Ensure a_actor is tracked (no roles, idle status) if it isn't already. The
+        // ADDING mutators below (Add*/Set*) also do this; the Remove* mutators never
+        // do -- clearing a role on an untracked actor is a no-op. (The Papyrus binding
+        // layer additionally gates adders on persistence; see GKNative.cpp.)
         void AddActor(RE::FormID a_actor) { GetOrCreate(a_actor); }
 
         // --- global roles (kGlobalMask; not tied to any labyrinth) ---
