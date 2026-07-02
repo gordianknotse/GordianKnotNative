@@ -32,42 +32,95 @@ namespace {
         return out;
     }
 
-    // --- roles ----------------------------------------------------------------
+    // Resolve a list of FormIDs back to live references (dropping any that no longer
+    // resolve) for return to Papyrus as an ObjectReference[] (e.g. labyrinth anchors).
+    std::vector<RE::TESObjectREFR*> ResolveRefs(const std::vector<RE::FormID>& a_ids) {
+        std::vector<RE::TESObjectREFR*> out;
+        out.reserve(a_ids.size());
+        for (const auto id : a_ids) {
+            if (auto* ref = AsRef(id)) {
+                out.push_back(ref);
+            }
+        }
+        return out;
+    }
 
-    void SetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_roles) {
+    // --- tracking + roles -----------------------------------------------------
+    // Roles come in two kinds (see GK::Role): GLOBAL (Wanderer) live on the actor
+    // and take no labyrinth; SCOPED (Warden/Prisoner) are an association with one
+    // labyrinth (its anchor). The per-labyrinth generic functions below operate on
+    // SCOPED bits only -- any global bit in the passed mask is ignored (use the
+    // dedicated Wanderer functions for that). Every role mutator ensures the actor
+    // is tracked, so giving (or clearing) any role also adds the actor.
+
+    void AddActor(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
             return;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().SetRoles(a_actor->GetFormID(), static_cast<std::uint32_t>(a_roles));
+        state->Actors().AddActor(a_actor->GetFormID());
     }
 
-    void AddActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_role) {
-        if (!a_actor) {
+    void SetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
+                       std::int32_t a_roles) {
+        if (!a_actor || !a_labyrinth) {
             return;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().AddRole(a_actor->GetFormID(), static_cast<std::uint32_t>(a_role));
+        state->Actors().SetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID(),
+                                 static_cast<std::uint32_t>(a_roles) & GK::Role::kScopedMask);
     }
 
-    void RemoveActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_role) {
-        if (!a_actor) {
+    void AddActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::int32_t a_role) {
+        if (!a_actor || !a_labyrinth) {
             return;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().RemoveRole(a_actor->GetFormID(), static_cast<std::uint32_t>(a_role));
+        state->Actors().AddRole(a_actor->GetFormID(), a_labyrinth->GetFormID(),
+                                static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask);
     }
 
-    std::int32_t GetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+    void RemoveActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
+                         std::int32_t a_role) {
+        if (!a_actor || !a_labyrinth) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Actors().RemoveRole(a_actor->GetFormID(), a_labyrinth->GetFormID(),
+                                   static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask);
+    }
+
+    std::int32_t GetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        if (!a_actor || !a_labyrinth) {
+            return GK::Role::kNone;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return static_cast<std::int32_t>(state->Actors().GetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID()));
+    }
+
+    // The actor's global (non-labyrinth) role mask, e.g. Wanderer.
+    std::int32_t GetActorGlobalRoles(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
             return GK::Role::kNone;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return static_cast<std::int32_t>(state->Actors().GetRoles(a_actor->GetFormID()));
+        return static_cast<std::int32_t>(state->Actors().GetGlobalRoles(a_actor->GetFormID()));
+    }
+
+    // Shared body for the scoped Is<Role> tests (Warden/Prisoner in one labyrinth).
+    bool HasRoleIn(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
+        if (!a_actor || !a_labyrinth) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return (state->Actors().GetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID()) & a_flag) != 0;
     }
 
     bool IsWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
@@ -76,17 +129,69 @@ namespace {
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return (state->Actors().GetRoles(a_actor->GetFormID()) & GK::Role::kWanderer) != 0;
+        return (state->Actors().GetGlobalRoles(a_actor->GetFormID()) & GK::Role::kWanderer) != 0;
+    }
+    bool IsWarden(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        return HasRoleIn(a_actor, a_labyrinth, GK::Role::kWarden);
+    }
+    bool IsPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        return HasRoleIn(a_actor, a_labyrinth, GK::Role::kPrisoner);
     }
 
-    bool IsWarden(RE::StaticFunctionTag*, RE::Actor* a_actor) {
-        if (!a_actor) {
-            return false;
+    // Per-role set/clear convenience wrappers. Scoped variants take the labyrinth.
+    void SetRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
+        if (!a_actor || !a_labyrinth) {
+            return;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return (state->Actors().GetRoles(a_actor->GetFormID()) & GK::Role::kWarden) != 0;
+        state->Actors().AddRole(a_actor->GetFormID(), a_labyrinth->GetFormID(), a_flag);
     }
+
+    void ClearRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
+        if (!a_actor || !a_labyrinth) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Actors().RemoveRole(a_actor->GetFormID(), a_labyrinth->GetFormID(), a_flag);
+    }
+
+    // Wanderer is global -> no labyrinth.
+    void SetWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Actors().AddGlobalRole(a_actor->GetFormID(), GK::Role::kWanderer);
+    }
+    void ClearWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Actors().RemoveGlobalRole(a_actor->GetFormID(), GK::Role::kWanderer);
+    }
+    void SetWarden(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        SetRoleFlag(a_actor, a_labyrinth, GK::Role::kWarden);
+    }
+    void ClearWarden(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        ClearRoleFlag(a_actor, a_labyrinth, GK::Role::kWarden);
+    }
+    void SetPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        SetRoleFlag(a_actor, a_labyrinth, GK::Role::kPrisoner);
+    }
+    void ClearPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
+        ClearRoleFlag(a_actor, a_labyrinth, GK::Role::kPrisoner);
+    }
+
+    // Role-flag constants (single source of truth mirrored from GK::Role). Papyrus
+    // has no true constants on a Hidden global script, so we expose them as getters.
+    std::int32_t RoleWanderer(RE::StaticFunctionTag*) { return static_cast<std::int32_t>(GK::Role::kWanderer); }
+    std::int32_t RoleWarden(RE::StaticFunctionTag*) { return static_cast<std::int32_t>(GK::Role::kWarden); }
+    std::int32_t RolePrisoner(RE::StaticFunctionTag*) { return static_cast<std::int32_t>(GK::Role::kPrisoner); }
 
     // --- status ---------------------------------------------------------------
 
@@ -110,10 +215,55 @@ namespace {
 
     // --- queries --------------------------------------------------------------
 
-    std::vector<RE::Actor*> GetActorsByRole(RE::StaticFunctionTag*, std::int32_t a_roleMask) {
+    std::vector<RE::Actor*> GetActorsByRole(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
+                                            std::int32_t a_roleMask) {
+        if (!a_labyrinth) {
+            return {};
+        }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return ResolveActors(state->Actors().GetByRole(static_cast<std::uint32_t>(a_roleMask)));
+        return ResolveActors(
+            state->Actors().GetByRole(a_labyrinth->GetFormID(), static_cast<std::uint32_t>(a_roleMask)));
+    }
+
+    // Tracked actors whose GLOBAL role mask matches ANY bit in a_roleMask (e.g. all
+    // Wanderers). Global roles aren't tied to a labyrinth, so this takes none.
+    std::vector<RE::Actor*> GetActorsByGlobalRole(RE::StaticFunctionTag*, std::int32_t a_roleMask) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return ResolveActors(state->Actors().GetByGlobalRole(static_cast<std::uint32_t>(a_roleMask)));
+    }
+
+    // Labyrinths (anchor refs) in which the actor holds ANY scoped role.
+    std::vector<RE::TESObjectREFR*> GetActorLabyrinths(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return {};
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return ResolveRefs(state->Actors().GetLabyrinths(a_actor->GetFormID()));
+    }
+
+    // Labyrinths (anchor refs) where the actor's role mask intersects a_roleMask.
+    std::vector<RE::TESObjectREFR*> GetLabyrinthsByActorRole(RE::StaticFunctionTag*, RE::Actor* a_actor,
+                                                             std::int32_t a_roleMask) {
+        if (!a_actor) {
+            return {};
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return ResolveRefs(
+            state->Actors().GetLabyrinthsByRole(a_actor->GetFormID(), static_cast<std::uint32_t>(a_roleMask)));
+    }
+
+    // True if the actor holds any role intersecting a_roleMask in ANY labyrinth.
+    bool HasRoleAnywhere(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_roleMask) {
+        if (!a_actor) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return state->Actors().HasRoleAnywhere(a_actor->GetFormID(), static_cast<std::uint32_t>(a_roleMask));
     }
 
     std::vector<RE::Actor*> GetActorsByStatus(RE::StaticFunctionTag*, std::int32_t a_status) {
@@ -134,7 +284,8 @@ namespace {
     // --- config / lifecycle ---------------------------------------------------
 
     void ConfigureKeywords(RE::StaticFunctionTag*, RE::BGSKeyword* a_cellDoor, RE::BGSKeyword* a_patrolMarker,
-                           RE::BGSKeyword* a_furniture, RE::BGSKeyword* a_inMarker, RE::BGSKeyword* a_outMarker) {
+                           RE::BGSKeyword* a_furniture, RE::BGSKeyword* a_inMarker, RE::BGSKeyword* a_outMarker,
+                           RE::BGSKeyword* a_warden) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         auto& kw = state->Keywords();
@@ -143,6 +294,7 @@ namespace {
         kw.furniture = a_furniture;
         kw.inMarker = a_inMarker;
         kw.outMarker = a_outMarker;
+        kw.warden = a_warden;
         if (kw.Valid()) {
             logger::info("GKNative: resource keywords configured.");
         } else {
@@ -165,6 +317,13 @@ namespace {
         // Global one-shot sweep across all registered labyrinths; finds persistent
         // resources without their cells being loaded. GK::ScanAllForms locks itself.
         return GK::ScanAllForms();
+    }
+
+    // True if akRef is a persistent reference (kPersistent form flag). Persistent refs
+    // survive cell reset, are simulated off-screen, and are the only ones ScanAllForms
+    // finds while their cell is unloaded. Diagnostic: no game state, no lock needed.
+    bool IsPersistent(RE::StaticFunctionTag*, RE::TESObjectREFR* a_ref) {
+        return a_ref && (a_ref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kPersistent) != 0;
     }
 
     // --- cells ----------------------------------------------------------------
@@ -300,23 +459,42 @@ namespace GK::Papyrus {
             return false;
         }
 
+        a_vm->RegisterFunction("AddActor", kClass, AddActor);
         a_vm->RegisterFunction("SetActorRoles", kClass, SetActorRoles);
         a_vm->RegisterFunction("AddActorRole", kClass, AddActorRole);
         a_vm->RegisterFunction("RemoveActorRole", kClass, RemoveActorRole);
         a_vm->RegisterFunction("GetActorRoles", kClass, GetActorRoles);
+        a_vm->RegisterFunction("GetActorGlobalRoles", kClass, GetActorGlobalRoles);
         a_vm->RegisterFunction("IsWanderer", kClass, IsWanderer);
         a_vm->RegisterFunction("IsWarden", kClass, IsWarden);
+        a_vm->RegisterFunction("IsPrisoner", kClass, IsPrisoner);
+
+        a_vm->RegisterFunction("SetWanderer", kClass, SetWanderer);
+        a_vm->RegisterFunction("ClearWanderer", kClass, ClearWanderer);
+        a_vm->RegisterFunction("SetWarden", kClass, SetWarden);
+        a_vm->RegisterFunction("ClearWarden", kClass, ClearWarden);
+        a_vm->RegisterFunction("SetPrisoner", kClass, SetPrisoner);
+        a_vm->RegisterFunction("ClearPrisoner", kClass, ClearPrisoner);
+
+        a_vm->RegisterFunction("RoleWanderer", kClass, RoleWanderer);
+        a_vm->RegisterFunction("RoleWarden", kClass, RoleWarden);
+        a_vm->RegisterFunction("RolePrisoner", kClass, RolePrisoner);
 
         a_vm->RegisterFunction("SetActorStatus", kClass, SetActorStatus);
         a_vm->RegisterFunction("GetActorStatus", kClass, GetActorStatus);
 
         a_vm->RegisterFunction("GetActorsByRole", kClass, GetActorsByRole);
+        a_vm->RegisterFunction("GetActorsByGlobalRole", kClass, GetActorsByGlobalRole);
+        a_vm->RegisterFunction("GetActorLabyrinths", kClass, GetActorLabyrinths);
+        a_vm->RegisterFunction("GetLabyrinthsByActorRole", kClass, GetLabyrinthsByActorRole);
+        a_vm->RegisterFunction("HasRoleAnywhere", kClass, HasRoleAnywhere);
         a_vm->RegisterFunction("GetActorsByStatus", kClass, GetActorsByStatus);
         a_vm->RegisterFunction("ForgetActor", kClass, ForgetActor);
 
         a_vm->RegisterFunction("ConfigureKeywords", kClass, ConfigureKeywords);
         a_vm->RegisterFunction("RegisterLabyrinth", kClass, RegisterLabyrinth);
         a_vm->RegisterFunction("ScanAllLabyrinths", kClass, ScanAllLabyrinths);
+        a_vm->RegisterFunction("IsPersistent", kClass, IsPersistent);
 
         a_vm->RegisterFunction("GetCellDoor", kClass, GetCellDoor);
         a_vm->RegisterFunction("GetCellInMarker", kClass, GetCellInMarker);

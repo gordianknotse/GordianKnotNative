@@ -1,5 +1,6 @@
 #include "State/Labyrinth.h"
 
+#include "State/ActorRegistry.h"
 #include "State/GameState.h"
 
 // =============================================================================
@@ -142,6 +143,27 @@ namespace GK {
             }
             return false;
         }
+
+        // A reference carrying the warden keyword, whose linked-ref target is a
+        // registered anchor, is an ACTOR placed as that labyrinth's warden. Track it
+        // (creating the actor if new) with the scoped Warden role for that labyrinth.
+        // Returns true if a warden actor was recorded. The caller holds the lock.
+        bool ClassifyWarden(RE::TESObjectREFR& a_ref, const ResourceKeywords& a_kw, const LabyrinthRegistry& a_labs,
+                            ActorRegistry& a_actors) {
+            const auto* tgt = a_ref.GetLinkedRef(a_kw.warden);
+            if (!tgt || !a_labs.Contains(tgt->GetFormID())) {
+                return false;
+            }
+            auto* actor = a_ref.As<RE::Actor>();
+            if (!actor) {
+                return false;  // warden keyword on a non-actor reference; ignore
+            }
+            const bool persistent = (a_ref.GetFormFlags() & RE::TESObjectREFR::RecordFlags::kPersistent) != 0;
+            logger::info("ScanAllForms: warden actor {:08X} -> labyrinth {:08X} (persistent={}).", actor->GetFormID(),
+                         tgt->GetFormID(), persistent);
+            a_actors.AddRole(actor->GetFormID(), tgt->GetFormID(), Role::kWarden);
+            return true;
+        }
     }
 
     int ScanAllForms() {
@@ -161,8 +183,10 @@ namespace GK {
         }
 
         auto& reg = state->Resources();
+        auto& actors = state->Actors();
         std::uint32_t examined = 0;
         std::uint32_t matched = 0;
+        std::uint32_t wardens = 0;
 
         // The global form table holds every INSTANTIATED form: all persistent
         // references at all times, plus temporaries of currently-loaded cells. So this
@@ -183,12 +207,15 @@ namespace GK {
                 ++examined;
                 if (ClassifyRef(*ref, kw, labs, reg)) {
                     ++matched;
+                } else if (ClassifyWarden(*ref, kw, labs, actors)) {
+                    ++wardens;
                 }
             }
         }
 
-        logger::info("ScanAllForms: examined {} reference(s), matched {} resource(s) across {} labyrinth(s).", examined,
-                     matched, labs.All().size());
+        logger::info(
+            "ScanAllForms: examined {} reference(s), matched {} resource(s) + {} warden actor(s) across {} labyrinth(s).",
+            examined, matched, wardens, labs.All().size());
         return static_cast<int>(matched);
     }
 }

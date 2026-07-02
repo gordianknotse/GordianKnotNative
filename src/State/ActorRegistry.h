@@ -14,18 +14,40 @@ namespace GK {
     // lock.
     class ActorRegistry {
     public:
-        void SetRoles(RE::FormID a_actor, std::uint32_t a_roles);
-        void AddRole(RE::FormID a_actor, std::uint32_t a_role);
-        void RemoveRole(RE::FormID a_actor, std::uint32_t a_role);
-        [[nodiscard]] std::uint32_t GetRoles(RE::FormID a_actor) const;
+        // Ensure a_actor is tracked (no roles, idle status) if it isn't already. Every
+        // role mutator below also does this, so an actor becomes tracked the moment it
+        // is given (or has cleared) any role.
+        void AddActor(RE::FormID a_actor) { GetOrCreate(a_actor); }
+
+        // --- global roles (kGlobalMask; not tied to any labyrinth) ---
+        void AddGlobalRole(RE::FormID a_actor, std::uint32_t a_role);
+        void RemoveGlobalRole(RE::FormID a_actor, std::uint32_t a_role);
+        [[nodiscard]] std::uint32_t GetGlobalRoles(RE::FormID a_actor) const;
+        // FormIDs of every tracked actor whose global mask intersects a_roleMask.
+        [[nodiscard]] std::vector<RE::FormID> GetByGlobalRole(std::uint32_t a_roleMask) const;
+
+        // --- scoped roles (kScopedMask; a_lab is the anchor-REFR FormID) ---
+        // Setting a labyrinth's mask to 0 (SetRoles / RemoveRole) drops that association.
+        void SetRoles(RE::FormID a_actor, RE::FormID a_lab, std::uint32_t a_roles);
+        void AddRole(RE::FormID a_actor, RE::FormID a_lab, std::uint32_t a_role);
+        void RemoveRole(RE::FormID a_actor, RE::FormID a_lab, std::uint32_t a_role);
+        [[nodiscard]] std::uint32_t GetRoles(RE::FormID a_actor, RE::FormID a_lab) const;
 
         void SetStatus(RE::FormID a_actor, std::int32_t a_status);
         [[nodiscard]] std::int32_t GetStatus(RE::FormID a_actor) const;
 
-        // FormIDs of every tracked actor whose roles intersect a_roleMask.
-        [[nodiscard]] std::vector<RE::FormID> GetByRole(std::uint32_t a_roleMask) const;
+        // FormIDs of every tracked actor whose role mask in a_lab intersects a_roleMask.
+        [[nodiscard]] std::vector<RE::FormID> GetByRole(RE::FormID a_lab, std::uint32_t a_roleMask) const;
         // FormIDs of every tracked actor whose status equals a_status.
         [[nodiscard]] std::vector<RE::FormID> GetByStatus(std::int32_t a_status) const;
+
+        // Anchor FormIDs of every labyrinth in which a_actor holds any (scoped) role.
+        [[nodiscard]] std::vector<RE::FormID> GetLabyrinths(RE::FormID a_actor) const;
+        // Anchor FormIDs of the labyrinths where a_actor's role mask intersects a_roleMask.
+        [[nodiscard]] std::vector<RE::FormID> GetLabyrinthsByRole(RE::FormID a_actor, std::uint32_t a_roleMask) const;
+        // True if a_actor holds any role intersecting a_roleMask either globally OR in
+        // any labyrinth (so it works for both global and scoped role bits).
+        [[nodiscard]] bool HasRoleAnywhere(RE::FormID a_actor, std::uint32_t a_roleMask) const;
 
         // Inserts or overwrites a record wholesale (used by serialization load).
         void Put(RE::FormID a_actor, const ActorRecord& a_record) { _records[a_actor] = a_record; }

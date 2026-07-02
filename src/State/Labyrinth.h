@@ -35,18 +35,21 @@ namespace GK {
         std::unordered_set<RE::FormID> _anchors;
     };
 
-    // The five type keywords used during discovery. Passed in each session via
+    // The type keywords used during discovery. Passed in each session via
     // ConfigureKeywords (live BGSKeyword* pointers, not persisted — re-supplied by
-    // Papyrus on load).
+    // Papyrus on load). cellDoor/patrolMarker/furniture/in/out identify resource
+    // references; warden identifies an ACTOR reference placed as a labyrinth's warden
+    // (its linked-ref target is the labyrinth anchor).
     struct ResourceKeywords {
         RE::BGSKeyword* cellDoor = nullptr;
         RE::BGSKeyword* patrolMarker = nullptr;
         RE::BGSKeyword* furniture = nullptr;
         RE::BGSKeyword* inMarker = nullptr;
         RE::BGSKeyword* outMarker = nullptr;
+        RE::BGSKeyword* warden = nullptr;
 
         [[nodiscard]] bool Valid() const {
-            return cellDoor && patrolMarker && furniture && inMarker && outMarker;
+            return cellDoor && patrolMarker && furniture && inMarker && outMarker && warden;
         }
     };
 

@@ -30,6 +30,10 @@ namespace GK::Serialization {
     }
 
     namespace Version {
-        inline constexpr std::uint32_t kActor = 1;
+        // v1: single role mask per actor. v2: roles scoped per labyrinth (map
+        // anchor-FormID -> mask). v3: adds a per-actor global role mask (Wanderer).
+        // Older saves load best-effort: v1 drops roles (keeps status); v2 loads
+        // scoped roles with an empty global mask.
+        inline constexpr std::uint32_t kActor = 3;
     }
 }
