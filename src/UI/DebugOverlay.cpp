@@ -1,5 +1,6 @@
 #include "UI/DebugOverlay.h"
 
+#include "State/AliasPool.h"
 #include "State/GameState.h"
 #include "State/Labyrinth.h"
 
@@ -25,7 +26,9 @@
 // ImGui text field is focused (io.WantTextInput). Ctrl+Shift+G always toggles.
 //
 // Everything drawn is read-only over GameState (under its lock); the only
-// mutating action is the explicitly-safe "Run ScanAllLabyrinths" button.
+// mutating actions are explicitly-safe buttons ("Run ScanAllLabyrinths",
+// per-labyrinth "Teleport player to anchor" -- the latter queued through the
+// SKSE task interface, since game mutations may not run on this hook's thread).
 // =============================================================================
 
 namespace {
@@ -53,9 +56,6 @@ namespace {
     // Mouse ButtonEvent idCodes.
     constexpr std::uint32_t kMouse_WheelUp = 8;
     constexpr std::uint32_t kMouse_WheelDown = 9;
-
-    // Keep in sync with kAliasPoolPrefix in Papyrus/GKNative.cpp.
-    constexpr std::string_view kAliasPoolPrefix = "GkNpc"sv;
 
     // --- overlay state ----------------------------------------------------------
     std::atomic<bool> g_visible{false};
@@ -170,10 +170,6 @@ namespace {
         return lower(a_haystack).find(lower(a_filter)) != std::string::npos;
     }
 
-    bool IsPoolAliasName(const RE::BGSBaseAlias& a_alias) {
-        const char* name = a_alias.aliasName.c_str();
-        return name && _strnicmp(name, kAliasPoolPrefix.data(), kAliasPoolPrefix.size()) == 0;
-    }
 
     // --- panels ---------------------------------------------------------------------
 
@@ -244,7 +240,7 @@ namespace {
         }
         const RE::BSReadLockGuard guard{quest->aliasAccessLock};
         for (const auto* base : quest->aliases) {
-            if (!base || !IsPoolAliasName(*base)) {
+            if (!base || !GK::AliasPool::IsPoolAlias(*base)) {
                 continue;
             }
             const auto* refAlias = skyrim_cast<const RE::BGSRefAlias*>(base);
@@ -344,6 +340,19 @@ namespace {
             if (!ImGui::TreeNode(RefLabel(anchor).c_str())) {
                 continue;
             }
+            // MoveTo must run on the main thread, not this render-hook thread.
+            if (ImGui::Button("Teleport player to anchor")) {
+                SKSE::GetTaskInterface()->AddTask([anchorID = anchor]() {
+                    auto* form = RE::TESForm::LookupByID(anchorID);
+                    auto* ref = form ? form->As<RE::TESObjectREFR>() : nullptr;
+                    auto* player = RE::PlayerCharacter::GetSingleton();
+                    if (ref && player) {
+                        player->MoveTo(ref);
+                    } else {
+                        logger::warn("DebugOverlay: teleport failed, anchor {:08X} did not resolve.", anchorID);
+                    }
+                });
+            }
             ImGui::SeparatorText("Cells");
             for (const auto& [handle, cell] : reg.CellPool().All()) {
                 if (cell.labyrinth != anchor) {
@@ -400,7 +409,7 @@ namespace {
 
             const RE::BSReadLockGuard guard{quest->aliasAccessLock};
             for (const auto* base : quest->aliases) {
-                if (!base || !IsPoolAliasName(*base)) {
+                if (!base || !GK::AliasPool::IsPoolAlias(*base)) {
                     continue;
                 }
                 ++total;
@@ -412,8 +421,7 @@ namespace {
                     ++filled;
                     holderLabel = RefLabel(holder->GetFormID());
                 } else {
-                    // Mirror of AliasKey() in GKNative.cpp: reservation pending?
-                    const auto key = (static_cast<std::uint64_t>(quest->GetFormID()) << 32) | base->aliasID;
+                    const auto key = GK::AliasPool::Key(*quest, base->aliasID);
                     const auto it = a_state.AliasReservations().find(key);
                     if (it != a_state.AliasReservations().end() && now < it->second) {
                         ++reserved;
@@ -444,8 +452,8 @@ namespace {
         ImGui::Text("keywords valid: %s", kw.Valid() ? "yes" : "NO");
         ImGui::Text("  cellDoor %s   patrolMarker %s   furniture %s", kwLabel(kw.cellDoor).c_str(),
                     kwLabel(kw.patrolMarker).c_str(), kwLabel(kw.furniture).c_str());
-        ImGui::Text("  inMarker %s   outMarker %s   warden %s", kwLabel(kw.inMarker).c_str(),
-                    kwLabel(kw.outMarker).c_str(), kwLabel(kw.warden).c_str());
+        ImGui::Text("  inMarker %s   outMarker %s   warden %s   wanderer %s", kwLabel(kw.inMarker).c_str(),
+                    kwLabel(kw.outMarker).c_str(), kwLabel(kw.warden).c_str(), kwLabel(kw.wanderer).c_str());
         ImGui::Text("alias quest: %s",
                     a_state.AliasQuest() ? HexID(a_state.AliasQuest()->GetFormID()).c_str() : "(not set)");
 
