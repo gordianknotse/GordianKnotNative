@@ -336,10 +336,13 @@ namespace {
             return;
         }
         auto& reg = a_state.Resources();
-        for (const auto anchor : anchors) {
+        for (const auto& [anchor, factions] : anchors) {
             if (!ImGui::TreeNode(RefLabel(anchor).c_str())) {
                 continue;
             }
+            ImGui::Text("factions: warden %s   prisoner %s",
+                        factions.warden ? HexID(factions.warden->GetFormID()).c_str() : "(none)",
+                        factions.prisoner ? HexID(factions.prisoner->GetFormID()).c_str() : "(none)");
             // MoveTo must run on the main thread, not this render-hook thread.
             if (ImGui::Button("Teleport player to anchor")) {
                 SKSE::GetTaskInterface()->AddTask([anchorID = anchor]() {

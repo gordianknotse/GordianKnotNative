@@ -97,6 +97,13 @@ Function ClearWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
 Bool Function SetPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 Function ClearPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 
+; Imprison akActor in the labyrinth akWarden keeps: resolves the labyrinth from
+; akWarden's Warden role, then acts exactly like SetPrisoner(akActor, it) --
+; same tracking gate and faction sync. False if akWarden wardens no labyrinth or
+; akActor can't be tracked. If akWarden somehow wardens several labyrinths, the
+; first is used (a warning is logged).
+Bool Function Capture(Actor akWarden, Actor akActor) Global Native
+
 ; --- Global roles (Wanderer): no labyrinth ---
 
 ; The actor's global (non-labyrinth) role bitmask.
@@ -189,7 +196,15 @@ Function ConfigureKeywords(Keyword akCellDoor, Keyword akPatrolMarker, Keyword a
 ; Register a labyrinth, identified directly by its anchor XMarker reference. Only
 ; stores the anchor's FormID, so the anchor's cell need not be loaded. The same
 ; anchor reference is what you pass to GetCells / GetMarkers / GetFurnitures.
-Function RegisterLabyrinth(ObjectReference akAnchor) Global Native
+;
+; akWardenFaction / akPrisonerFaction are the labyrinth's role factions: an actor
+; JOINS the matching faction whenever it gains that role here (Set*/Add* mutators
+; AND scan discovery), and LEAVES it when the role is cleared (Remove*/Clear*,
+; SetActorRoles with the bit dropped, ForgetActor) -- unless another labyrinth
+; where the actor still holds a role grants the same faction. Factions may be
+; shared across labyrinths; pass None to disable faction sync for that role.
+; Like the keywords, they're live session pointers: re-register after each load.
+Function RegisterLabyrinth(ObjectReference akAnchor, Faction akWardenFaction, Faction akPrisonerFaction) Global Native
 
 ; One-shot global discovery across ALL registered labyrinths. Sweeps the whole
 ; form table, so it finds resources WITHOUT their cells being loaded -- but only

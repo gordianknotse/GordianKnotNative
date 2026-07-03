@@ -3,6 +3,7 @@
 #include "State/ActorRegistry.h"
 #include "State/AliasPool.h"
 #include "State/GameState.h"
+#include "State/RoleFactions.h"
 
 // =============================================================================
 // Discovery (Encoding B). A resource reference is identified by a type linked-ref
@@ -167,7 +168,9 @@ namespace GK {
             }
             logger::info("ScanAllForms: warden actor {:08X} -> labyrinth {:08X} (persistent={}).", actor->GetFormID(),
                          tgt->GetFormID(), persistent);
+            const auto old = a_state.Actors().GetRoles(actor->GetFormID(), tgt->GetFormID());
             a_state.Actors().AddRole(actor->GetFormID(), tgt->GetFormID(), Role::kWarden);
+            RoleFactions::Apply(a_state, *actor, tgt->GetFormID(), Role::kWarden & ~old, 0);
             return true;
         }
 

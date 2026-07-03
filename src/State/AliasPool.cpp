@@ -1,6 +1,7 @@
 #include "State/AliasPool.h"
 
 #include "State/GameState.h"
+#include "VmCall.h"
 
 namespace GK::AliasPool {
     namespace {
@@ -41,18 +42,7 @@ namespace GK::AliasPool {
         // Queue a Papyrus call on a pool alias (e.g. ForceRefTo/Clear) through the VM.
         // Takes ownership of a_args. Returns false if the VM couldn't dispatch.
         bool DispatchAliasCall(RE::BGSRefAlias& a_alias, const char* a_fn, RE::BSScript::IFunctionArguments* a_args) {
-            const std::unique_ptr<RE::BSScript::IFunctionArguments> args{a_args};
-            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-            auto* policy = vm ? vm->GetObjectHandlePolicy() : nullptr;
-            if (!policy) {
-                return false;
-            }
-            const auto handle = policy->GetHandleForObject(a_alias.GetVMTypeID(), &a_alias);
-            if (handle == policy->EmptyHandle()) {
-                return false;
-            }
-            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
-            return vm->DispatchMethodCall2(handle, "ReferenceAlias", a_fn, args.get(), callback);
+            return DispatchVmCall(a_alias.GetVMTypeID(), &a_alias, "ReferenceAlias", a_fn, a_args);
         }
     }
 

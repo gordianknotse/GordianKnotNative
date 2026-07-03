@@ -3,6 +3,7 @@
 #include "State/AliasPool.h"
 #include "State/GameState.h"
 #include "State/Labyrinth.h"
+#include "State/RoleFactions.h"
 
 // =============================================================================
 // Phase 1: actor tracking (roles + status). Resource / labyrinth / orphan
@@ -77,14 +78,14 @@ namespace {
         const auto masked = static_cast<std::uint32_t>(a_roles) & GK::Role::kScopedMask;
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        if (masked == GK::Role::kNone) {  // pure clear: never tracks, always "succeeds"
-            state->Actors().SetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID(), masked);
-            return true;
+        const auto id = a_actor->GetFormID();
+        const auto labID = a_labyrinth->GetFormID();
+        if (masked != GK::Role::kNone && !GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
+            return false;  // a pure clear (masked == 0) never tracks and always "succeeds"
         }
-        if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
-            return false;
-        }
-        state->Actors().SetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID(), masked);
+        const auto old = state->Actors().GetRoles(id, labID);
+        state->Actors().SetRoles(id, labID, masked);
+        GK::RoleFactions::Apply(*state, *a_actor, labID, masked & ~old, old & ~masked);
         return true;
     }
 
@@ -92,13 +93,17 @@ namespace {
         if (!a_actor || !a_labyrinth) {
             return false;
         }
+        const auto masked = static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask;
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
             return false;
         }
-        state->Actors().AddRole(a_actor->GetFormID(), a_labyrinth->GetFormID(),
-                                static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask);
+        const auto id = a_actor->GetFormID();
+        const auto labID = a_labyrinth->GetFormID();
+        const auto old = state->Actors().GetRoles(id, labID);
+        state->Actors().AddRole(id, labID, masked);
+        GK::RoleFactions::Apply(*state, *a_actor, labID, masked & ~old, 0);
         return true;
     }
 
@@ -107,10 +112,14 @@ namespace {
         if (!a_actor || !a_labyrinth) {
             return;
         }
+        const auto masked = static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask;
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().RemoveRole(a_actor->GetFormID(), a_labyrinth->GetFormID(),
-                                   static_cast<std::uint32_t>(a_role) & GK::Role::kScopedMask);
+        const auto id = a_actor->GetFormID();
+        const auto labID = a_labyrinth->GetFormID();
+        const auto old = state->Actors().GetRoles(id, labID);
+        state->Actors().RemoveRole(id, labID, masked);
+        GK::RoleFactions::Apply(*state, *a_actor, labID, 0, old & masked);
     }
 
     std::int32_t GetActorRoles(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
@@ -157,6 +166,20 @@ namespace {
         return HasRoleIn(a_actor, a_labyrinth, GK::Role::kPrisoner);
     }
 
+    // Track a_actor (pool gate), OR a scoped role flag in for one labyrinth, and
+    // sync factions. Shared body of SetWarden/SetPrisoner/Capture. Caller holds
+    // the GameState lock.
+    bool AddScopedRole(GK::GameState& a_state, RE::Actor& a_actor, RE::FormID a_labID, std::uint32_t a_flag) {
+        if (!GK::AliasPool::EnsureTrackable(a_state, a_actor)) {
+            return false;
+        }
+        const auto id = a_actor.GetFormID();
+        const auto old = a_state.Actors().GetRoles(id, a_labID);
+        a_state.Actors().AddRole(id, a_labID, a_flag);
+        GK::RoleFactions::Apply(a_state, a_actor, a_labID, a_flag & ~old, 0);
+        return true;
+    }
+
     // Per-role set/clear convenience wrappers. Scoped variants take the labyrinth.
     bool SetRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
         if (!a_actor || !a_labyrinth) {
@@ -164,11 +187,7 @@ namespace {
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
-            return false;
-        }
-        state->Actors().AddRole(a_actor->GetFormID(), a_labyrinth->GetFormID(), a_flag);
-        return true;
+        return AddScopedRole(*state, *a_actor, a_labyrinth->GetFormID(), a_flag);
     }
 
     void ClearRoleFlag(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
@@ -177,7 +196,11 @@ namespace {
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().RemoveRole(a_actor->GetFormID(), a_labyrinth->GetFormID(), a_flag);
+        const auto id = a_actor->GetFormID();
+        const auto labID = a_labyrinth->GetFormID();
+        const auto old = state->Actors().GetRoles(id, labID);
+        state->Actors().RemoveRole(id, labID, a_flag);
+        GK::RoleFactions::Apply(*state, *a_actor, labID, 0, old & a_flag);
     }
 
     // Wanderer is global -> no labyrinth.
@@ -212,6 +235,28 @@ namespace {
     }
     void ClearPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth) {
         ClearRoleFlag(a_actor, a_labyrinth, GK::Role::kPrisoner);
+    }
+
+    // Capture: imprison a_actor in the labyrinth a_warden keeps -- resolves the
+    // labyrinth from a_warden's Warden role, then behaves exactly like SetPrisoner
+    // on it (pool gate + faction sync). One atomic native call, so the lookup and
+    // the mutation can't interleave with another thread.
+    bool Capture(RE::StaticFunctionTag*, RE::Actor* a_warden, RE::Actor* a_actor) {
+        if (!a_warden || !a_actor) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto labs = state->Actors().GetLabyrinthsByRole(a_warden->GetFormID(), GK::Role::kWarden);
+        if (labs.empty()) {
+            logger::warn("GKNative: Capture failed (actor {:08X} is warden of no labyrinth).", a_warden->GetFormID());
+            return false;
+        }
+        if (labs.size() > 1) {
+            logger::warn("GKNative: Capture: warden {:08X} keeps {} labyrinths; using {:08X}.", a_warden->GetFormID(),
+                         labs.size(), labs.front());
+        }
+        return AddScopedRole(*state, *a_actor, labs.front(), GK::Role::kPrisoner);
     }
 
     // Role-flag constants (single source of truth mirrored from GK::Role). Papyrus
@@ -309,7 +354,17 @@ namespace {
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Actors().Forget(a_actor->GetFormID());
+        const auto id = a_actor->GetFormID();
+        // Snapshot the scoped roles, then forget, then sync factions: with the
+        // records gone, no remaining role can keep a shared faction alive.
+        std::vector<std::pair<RE::FormID, std::uint32_t>> held;
+        for (const auto lab : state->Actors().GetLabyrinths(id)) {
+            held.emplace_back(lab, state->Actors().GetRoles(id, lab));
+        }
+        state->Actors().Forget(id);
+        for (const auto& [lab, roles] : held) {
+            GK::RoleFactions::Apply(*state, *a_actor, lab, 0, roles);
+        }
         // Release the actor's pool alias (if it holds one) so the slot frees up;
         // this also fires the OnGKRelease destructor hook on the driver script.
         GK::AliasPool::Release(*state, *a_actor);
@@ -337,15 +392,18 @@ namespace {
         }
     }
 
-    void RegisterLabyrinth(RE::StaticFunctionTag*, RE::TESObjectREFR* a_anchor) {
+    void RegisterLabyrinth(RE::StaticFunctionTag*, RE::TESObjectREFR* a_anchor, RE::TESFaction* a_wardenFaction,
+                           RE::TESFaction* a_prisonerFaction) {
         if (!a_anchor) {
             logger::warn("GKNative: RegisterLabyrinth ignored (null anchor).");
             return;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        state->Labyrinths().Register(a_anchor->GetFormID());
-        logger::info("GKNative: registered labyrinth (anchor {:08X}).", a_anchor->GetFormID());
+        state->Labyrinths().Register(a_anchor->GetFormID(), a_wardenFaction, a_prisonerFaction);
+        logger::info("GKNative: registered labyrinth (anchor {:08X}, wardenFaction {:08X}, prisonerFaction {:08X}).",
+                     a_anchor->GetFormID(), a_wardenFaction ? a_wardenFaction->GetFormID() : 0,
+                     a_prisonerFaction ? a_prisonerFaction->GetFormID() : 0);
     }
 
     std::int32_t ScanAllLabyrinths(RE::StaticFunctionTag*) {
@@ -542,6 +600,7 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("ClearWarden", kClass, ClearWarden);
         a_vm->RegisterFunction("SetPrisoner", kClass, SetPrisoner);
         a_vm->RegisterFunction("ClearPrisoner", kClass, ClearPrisoner);
+        a_vm->RegisterFunction("Capture", kClass, Capture);
 
         a_vm->RegisterFunction("RoleWanderer", kClass, RoleWanderer);
         a_vm->RegisterFunction("RoleWarden", kClass, RoleWarden);

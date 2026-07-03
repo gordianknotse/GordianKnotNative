@@ -1,6 +1,6 @@
 #pragma once
 
-#include <unordered_set>
+#include <unordered_map>
 
 // =============================================================================
 // Labyrinths + keyword-driven resource discovery (Encoding B).
@@ -14,25 +14,41 @@
 // =============================================================================
 
 namespace GK {
-    // The set of registered labyrinth anchors (REFR FormIDs). A resource belongs to
+    // Per-labyrinth role factions, supplied by RegisterLabyrinth. Live pointers
+    // (session config, like ResourceKeywords -- re-supplied by Papyrus each load,
+    // never serialized). The same faction may back many labyrinths; either may be
+    // null, which disables faction sync for that role.
+    struct LabyrinthFactions {
+        RE::TESFaction* warden = nullptr;
+        RE::TESFaction* prisoner = nullptr;
+    };
+
+    // The registered labyrinths, keyed by anchor REFR FormID. A resource belongs to
     // a labyrinth iff its type linked-ref targets one of these anchors.
     // NOT thread-safe; used under the GameState lock.
     class LabyrinthRegistry {
     public:
-        void Register(RE::FormID a_anchor) { _anchors.insert(a_anchor); }
+        void Register(RE::FormID a_anchor, RE::TESFaction* a_wardenFaction, RE::TESFaction* a_prisonerFaction) {
+            _labyrinths[a_anchor] = LabyrinthFactions{a_wardenFaction, a_prisonerFaction};
+        }
 
         // Is this FormID a registered labyrinth anchor?
-        [[nodiscard]] bool Contains(RE::FormID a_anchor) const { return _anchors.contains(a_anchor); }
+        [[nodiscard]] bool Contains(RE::FormID a_anchor) const { return _labyrinths.contains(a_anchor); }
 
-        [[nodiscard]] bool Empty() const { return _anchors.empty(); }
+        // The labyrinth's role factions (nullptr if the anchor isn't registered).
+        [[nodiscard]] const LabyrinthFactions* Find(RE::FormID a_anchor) const {
+            const auto it = _labyrinths.find(a_anchor);
+            return it != _labyrinths.end() ? &it->second : nullptr;
+        }
 
-        void Clear() { _anchors.clear(); }
+        [[nodiscard]] bool Empty() const { return _labyrinths.empty(); }
 
-        [[nodiscard]] std::unordered_set<RE::FormID>& All() { return _anchors; }
-        [[nodiscard]] const std::unordered_set<RE::FormID>& All() const { return _anchors; }
+        void Clear() { _labyrinths.clear(); }
+
+        [[nodiscard]] const std::unordered_map<RE::FormID, LabyrinthFactions>& All() const { return _labyrinths; }
 
     private:
-        std::unordered_set<RE::FormID> _anchors;
+        std::unordered_map<RE::FormID, LabyrinthFactions> _labyrinths;
     };
 
     // The type keywords used during discovery. Passed in each session via

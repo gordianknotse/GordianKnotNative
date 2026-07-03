@@ -50,12 +50,14 @@ set(SOURCES
     src/State/AliasPool.cpp
     src/State/GameState.cpp
     src/State/Labyrinth.cpp
+    src/State/RoleFactions.cpp
     src/Papyrus/GKNative.cpp
     src/Serialization/Serialization.cpp
     src/UI/DebugOverlay.cpp
 
     src/Log.h
     src/PCH.h
+    src/VmCall.h
     src/Events/EquipEventSink.h
     src/State/ActorState.h
     src/State/ActorRegistry.h
@@ -67,6 +69,7 @@ set(SOURCES
     src/State/Furniture.h
     src/State/ResourceRegistry.h
     src/State/Labyrinth.h
+    src/State/RoleFactions.h
     src/Papyrus/GKNative.h
     src/Serialization/Records.h
     src/Serialization/Serialization.h
