@@ -39,6 +39,9 @@ namespace GK {
 
         // FormIDs of every tracked actor whose role mask in a_lab intersects a_roleMask.
         [[nodiscard]] std::vector<RE::FormID> GetByRole(RE::FormID a_lab, std::uint32_t a_roleMask) const;
+        // FormIDs of every tracked actor whose scoped role mask in ANY labyrinth
+        // intersects a_roleMask (each actor listed once).
+        [[nodiscard]] std::vector<RE::FormID> GetByRoleAnywhere(std::uint32_t a_roleMask) const;
         // FormIDs of every tracked actor whose status equals a_status.
         [[nodiscard]] std::vector<RE::FormID> GetByStatus(std::int32_t a_status) const;
 

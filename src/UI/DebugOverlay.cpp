@@ -426,7 +426,7 @@ namespace {
                 } else {
                     const auto key = GK::AliasPool::Key(*quest, base->aliasID);
                     const auto it = a_state.AliasReservations().find(key);
-                    if (it != a_state.AliasReservations().end() && now < it->second) {
+                    if (it != a_state.AliasReservations().end() && now < it->second.expiry) {
                         ++reserved;
                         holderLabel = "(reserved - fill pending)";
                     }

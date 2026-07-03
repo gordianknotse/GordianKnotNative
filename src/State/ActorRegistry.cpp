@@ -91,6 +91,19 @@ namespace GK {
         return out;
     }
 
+    std::vector<RE::FormID> ActorRegistry::GetByRoleAnywhere(std::uint32_t a_roleMask) const {
+        std::vector<RE::FormID> out;
+        for (const auto& [id, rec] : _records) {
+            for (const auto& [lab, mask] : rec.rolesByLab) {
+                if ((mask & a_roleMask) != 0) {
+                    out.push_back(id);  // once per actor, however many labyrinths match
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     std::vector<RE::FormID> ActorRegistry::GetByStatus(std::int32_t a_status) const {
         std::vector<RE::FormID> out;
         for (const auto& [id, rec] : _records) {

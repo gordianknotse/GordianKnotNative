@@ -7,9 +7,9 @@ namespace GK::AliasPool {
     namespace {
         constexpr auto kReservationTTL = std::chrono::seconds(10);
 
-        // Find a free pool alias and reserve it (caller holds the GameState lock).
-        // Returns nullptr if the pool is exhausted.
-        RE::BGSRefAlias* ReserveFree(GameState& a_state, RE::TESQuest& a_quest) {
+        // Find a free pool alias and reserve it for a_actorID (caller holds the
+        // GameState lock). Returns nullptr if the pool is exhausted.
+        RE::BGSRefAlias* ReserveFree(GameState& a_state, RE::TESQuest& a_quest, RE::FormID a_actorID) {
             auto& reservations = a_state.AliasReservations();
             const auto now = std::chrono::steady_clock::now();
 
@@ -28,12 +28,12 @@ namespace GK::AliasPool {
                     continue;
                 }
                 if (auto it = reservations.find(key); it != reservations.end()) {
-                    if (now < it->second) {
+                    if (now < it->second.expiry) {
                         continue;  // actively reserved by another caller
                     }
                     reservations.erase(it);  // expired: the fill never landed
                 }
-                reservations.emplace(key, now + kReservationTTL);
+                reservations.emplace(key, GameState::AliasReservation{now + kReservationTTL, a_actorID});
                 return refAlias;
             }
             return nullptr;  // pool exhausted
@@ -69,6 +69,28 @@ namespace GK::AliasPool {
         return nullptr;
     }
 
+    RE::BGSRefAlias* FindHoldingOrReserved(GameState& a_state, RE::TESQuest& a_quest, const RE::Actor& a_actor) {
+        if (auto* alias = FindHolding(a_quest, a_actor)) {
+            return alias;
+        }
+        // Fill still pending: locate the live reservation this actor holds.
+        const auto now = std::chrono::steady_clock::now();
+        const auto id = a_actor.GetFormID();
+        for (const auto& [key, res] : a_state.AliasReservations()) {
+            if (res.actor != id || now >= res.expiry || static_cast<RE::FormID>(key >> 32) != a_quest.GetFormID()) {
+                continue;
+            }
+            const auto aliasID = static_cast<std::uint32_t>(key);
+            const RE::BSReadLockGuard aliasGuard{a_quest.aliasAccessLock};
+            for (auto* base : a_quest.aliases) {
+                if (base && base->aliasID == aliasID) {
+                    return skyrim_cast<RE::BGSRefAlias*>(base);
+                }
+            }
+        }
+        return nullptr;
+    }
+
     bool EnsureTrackable(GameState& a_state, RE::Actor& a_actor) {
         const auto id = a_actor.GetFormID();
         if (a_state.Actors().Records().contains(id)) {
@@ -79,7 +101,7 @@ namespace GK::AliasPool {
             logger::warn("AliasPool: actor {:08X} not tracked (no alias quest; call ConfigureAliasQuest first).", id);
             return false;
         }
-        auto* alias = ReserveFree(a_state, *quest);
+        auto* alias = ReserveFree(a_state, *quest, id);
         if (!alias) {
             logger::warn("AliasPool: actor {:08X} not tracked (alias pool exhausted).", id);
             return false;
@@ -131,7 +153,7 @@ namespace GK::AliasPool {
                 continue;
             }
             const auto it = reservations.find(Key(a_quest, base->aliasID));
-            if (it == reservations.end() || now >= it->second) {
+            if (it == reservations.end() || now >= it->second.expiry) {
                 ++free;  // empty and not actively reserved
             }
         }

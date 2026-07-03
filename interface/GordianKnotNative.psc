@@ -1,64 +1,81 @@
 Scriptname GordianKnotNative Hidden
-{ Native (SKSE / GordianKnot.dll) function surface for the Gordian Knot mod.
+{Native (SKSE / GordianKnot.dll) function surface for the Gordian Knot mod. See the comment block below.}
 
-  All functions are Global Native and are registered by the C++ plugin at load
-  (see src/Papyrus/GKNative.cpp). Call them as GordianKnotNative.FunctionName(...).
-
-  Resources (cells / patrol markers / furniture) are referred to by an opaque
-  Int "handle" that is stable across saves. handle 0 == invalid / not found.
-
-  -- Role bit flags (used by the role functions; combine them together) --
-    0 = None
-    1 = Wanderer   (just wanders; GLOBAL -- not tied to any labyrinth)
-    2 = Warden     (dungeon-keeping duties; SCOPED to a labyrinth)
-    4 = Prisoner   (held in a labyrinth; SCOPED to a labyrinth)
-  An actor may hold any combination (e.g. Wanderer + Warden of A).
-
-  Roles come in two kinds:
-   * GLOBAL (Wanderer) is a plain attribute of the actor. Its functions take NO
-     labyrinth (SetWanderer/ClearWanderer/IsWanderer(akActor)).
-   * SCOPED (Warden, Prisoner) is an ASSOCIATION with a specific labyrinth (its
-     anchor reference), so an actor can be a Warden of A while a Prisoner of B.
-     Their functions take the labyrinth anchor. Clearing a scoped role in one
-     labyrinth leaves the actor's roles in every other labyrinth untouched.
-  The generic per-labyrinth functions (SetActorRoles / AddActorRole /
-  RemoveActorRole / GetActorRoles) operate on SCOPED bits only; a global bit in
-  the mask is ignored -- use the Wanderer functions for that.
-
-  -- Tracking & persistence --
-  A tracked actor needs persistence (to survive unload / cell reset / discovery)
-  AND its per-NPC driver script. EVERY new actor gets both the same way: it is
-  placed into a free GkNpc pool alias on the quest given to ConfigureAliasQuest
-  (the driver script is attached to the pool aliases in the CK -- never to actor
-  refs or bases). This happens automatically in every ADDING mutator (AddActor,
-  Set*/Add* role, SetActorStatus) AND for wardens discovered by
-  ScanAllLabyrinths, even for an actor that is already persistent (it still
-  needs the script). If no slot is free (or no alias quest is configured) the
-  mutator returns FALSE / the scan skips the warden, and the actor is NOT
-  tracked. CLEARING mutators (Remove*/Clear*) never track: clearing a role on an
-  untracked actor is a no-op.
-  The driver script (extends ReferenceAlias) gets an explicit constructor /
-  destructor pair, dispatched natively (declare only what you need; plain
-  Functions, not Events):
-    Function OnGKAssign(Actor akActor)   ; after the alias is force-filled
-    Function OnGKRelease(Actor akActor)  ; from ForgetActor, before the alias
-                                         ; is cleared -- keep it quick and
-                                         ; non-latent
-  Do NOT use OnInit as the constructor: it fires when the script INSTANCE is
-  created -- at quest start, with the alias still empty -- not when the alias
-  fills, and nothing fires on clear. Guard any OnInit logic against
-  GetActorReference() == None.
-
-  Papyrus has no bitwise operators. Because the flags are distinct bits you can
-  combine them by ADDING (1 + 4 = 5), or use SKSE's Math.LogicalOr / LogicalAnd
-  for general masking. The per-role Set/Clear/Is* helpers below mean you rarely
-  need to build a mask by hand. The Role*() getters return the flag values so you
-  never hardcode them (e.g. GordianKnotNative.RolePrisoner()).
-
-  -- Status --
-    0 = Idle. Any other Int is a "busy" code; Papyrus owns that vocabulary.
-    Status is GLOBAL to the actor (one thing at a time), not per-labyrinth.
-}
+; =============================================================================
+; IMPORTANT: keep the { } docstring above to ONE SHORT LINE. Doc comments are
+; compiled INTO the .pex, and the CK / game script loader reads them into a
+; fixed-size buffer -- a long one crashes both ("Being told to read in more
+; than our buffer will hold"). Plain ; comments are stripped by the compiler.
+; =============================================================================
+;
+; All functions are Global Native and are registered by the C++ plugin at load
+; (see src/Papyrus/GKNative.cpp). Call them as GordianKnotNative.FunctionName(...).
+;
+; Resources (cells / patrol markers / furniture) are referred to by an opaque
+; Int "handle" that is stable across saves. handle 0 == invalid / not found.
+;
+; -- Role bit flags (used by the role functions; combine them together) --
+;   0 = None
+;   1 = Wanderer   (just wanders; GLOBAL -- not tied to any labyrinth)
+;   2 = Warden     (dungeon-keeping duties; SCOPED to a labyrinth)
+;   4 = Prisoner   (held in a labyrinth; SCOPED to a labyrinth)
+; An actor may hold any combination (e.g. Wanderer + Warden of A).
+;
+; Roles come in two kinds:
+;  * GLOBAL (Wanderer) is a plain attribute of the actor. Its functions take NO
+;    labyrinth (SetWanderer/ClearWanderer/IsWanderer(akActor)).
+;  * SCOPED (Warden, Prisoner) is an ASSOCIATION with a specific labyrinth (its
+;    anchor reference), so an actor can be a Warden of A while a Prisoner of B.
+;    Their functions take the labyrinth anchor. Clearing a scoped role in one
+;    labyrinth leaves the actor's roles in every other labyrinth untouched.
+; The generic per-labyrinth functions (SetActorRoles / AddActorRole /
+; RemoveActorRole / GetActorRoles) operate on SCOPED bits only; a global bit in
+; the mask is ignored -- use the Wanderer functions for that.
+;
+; -- Tracking & persistence --
+; A tracked actor needs persistence (to survive unload / cell reset / discovery)
+; AND its per-NPC driver script. EVERY new actor gets both the same way: it is
+; placed into a free GkNpc pool alias on the quest given to ConfigureAliasQuest
+; (the driver script is attached to the pool aliases in the CK -- never to actor
+; refs or bases). This happens automatically in every ADDING mutator (AddActor,
+; Set*/Add* role, SetActorStatus) AND for wardens discovered by
+; ScanAllLabyrinths, even for an actor that is already persistent (it still
+; needs the script). If no slot is free (or no alias quest is configured) the
+; mutator returns FALSE / the scan skips the warden, and the actor is NOT
+; tracked. CLEARING mutators (Remove*/Clear*) never track: clearing a role on an
+; untracked actor is a no-op.
+; The driver script (extends ReferenceAlias) gets explicit lifecycle hooks,
+; dispatched natively (declare only what you need; plain Functions, not Events):
+;   Function OnGKAssign(Actor akActor)   ; after the alias is force-filled
+;   Function OnGKRelease(Actor akActor)  ; from ForgetActor, before the alias is
+;                                        ; cleared -- keep it quick / non-latent
+;   Function OnGKRoleApplied(Actor akActor, ObjectReference akLabyrinth, Int aiRole)
+;                                        ; fires once the role's FACTION change
+;                                        ; has COMPLETED (native completion
+;                                        ; callback on the AddToFaction call; one
+;                                        ; call per added role bit). The adders
+;                                        ; return before the faction applies (it
+;                                        ; goes through the VM), so anything that
+;                                        ; depends on the new faction --
+;                                        ; StopCombat after a Capture, say --
+;                                        ; belongs here, not after the adder
+;                                        ; call. Fires immediately if the role
+;                                        ; has no faction. Role removals fire no
+;                                        ; hook.
+; Do NOT use OnInit as the constructor: it fires when the script INSTANCE is
+; created -- at quest start, with the alias still empty -- not when the alias
+; fills, and nothing fires on clear. Guard any OnInit logic against
+; GetActorReference() == None.
+;
+; Papyrus has no bitwise operators. Because the flags are distinct bits you can
+; combine them by ADDING (1 + 4 = 5), or use SKSE's Math.LogicalOr / LogicalAnd
+; for general masking. The per-role Set/Clear/Is* helpers below mean you rarely
+; need to build a mask by hand. The Role*() getters return the flag values so you
+; never hardcode them (e.g. GordianKnotNative.RolePrisoner()).
+;
+; -- Status --
+;   0 = Idle. Any other Int is a "busy" code; Papyrus owns that vocabulary.
+;   Status is GLOBAL to the actor (one thing at a time), not per-labyrinth.
 
 ; =============================================================================
 ; Actors  (the player and tracked NPCs are handled identically here)
@@ -102,6 +119,9 @@ Function ClearPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 ; same tracking gate and faction sync. False if akWarden wardens no labyrinth or
 ; akActor can't be tracked. If akWarden somehow wardens several labyrinths, the
 ; first is used (a warning is logged).
+; NOTE: returns BEFORE the prisoner-faction change lands (it goes through the
+; VM). Put combat-stopping / pose logic in the driver script's OnGKRoleApplied
+; (see the header), which fires once the faction is really applied.
 Bool Function Capture(Actor akWarden, Actor akActor) Global Native
 
 ; --- Global roles (Wanderer): no labyrinth ---
@@ -151,6 +171,7 @@ Bool Function SetActorStatus(Actor akActor, Int aiStatus) Global Native
 Int Function GetActorStatus(Actor akActor) Global Native
 
 ; Tracked actors whose SCOPED role mask in akLabyrinth matches ANY bit in aiRoleMask.
+; Pass akLabyrinth = None to match the role in ANY labyrinth (each actor listed once).
 Actor[] Function GetActorsByRole(ObjectReference akLabyrinth, Int aiRoleMask) Global Native
 
 ; Tracked actors whose GLOBAL role mask matches ANY bit in aiRoleMask (e.g. Wanderers).

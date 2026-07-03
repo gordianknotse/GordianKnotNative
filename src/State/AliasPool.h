@@ -32,6 +32,12 @@ namespace GK::AliasPool {
     // The pool alias currently holding a_actor, or nullptr.
     [[nodiscard]] RE::BGSRefAlias* FindHolding(RE::TESQuest& a_quest, const RE::Actor& a_actor);
 
+    // Like FindHolding, but also matches the alias RESERVED for a_actor whose
+    // ForceRefTo hasn't landed yet -- so hooks dispatched right behind the fill can
+    // target the correct alias. Caller holds the GameState lock.
+    [[nodiscard]] RE::BGSRefAlias* FindHoldingOrReserved(GameState& a_state, RE::TESQuest& a_quest,
+                                                         const RE::Actor& a_actor);
+
     // Gate for every tracking entry point: an already-tracked actor passes through;
     // a new one is reserved a free pool alias and filled into it (ForceRefTo via the
     // VM), then the constructor hook `OnGKAssign(Actor)` is dispatched on the

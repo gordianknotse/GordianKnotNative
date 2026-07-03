@@ -16,6 +16,14 @@ namespace GK {
 // Membership changes are queued through the VM (Actor.AddToFaction /
 // RemoveFromFaction): idempotent, safe from any thread, and persisted by the
 // game's own save -- so roles restored from the co-save need no resync.
+//
+// Because the join is asynchronous, each applied role bit also fires
+// `OnGKRoleApplied(Actor, ObjectReference, Int)` on the actor's driver script,
+// queued right BEHIND the AddToFaction call -- by the time the hook runs the
+// faction change has been processed (safe point to stop combat etc.). It fires
+// whether or not the role has a faction, including for a brand-new actor whose
+// alias fill is still pending (the reserved slot is targeted directly).
+// Removals fire no hook.
 // =============================================================================
 
 namespace GK::RoleFactions {

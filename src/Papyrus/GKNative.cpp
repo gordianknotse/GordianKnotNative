@@ -293,13 +293,12 @@ namespace {
 
     std::vector<RE::Actor*> GetActorsByRole(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
                                             std::int32_t a_roleMask) {
-        if (!a_labyrinth) {
-            return {};
-        }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return ResolveActors(
-            state->Actors().GetByRole(a_labyrinth->GetFormID(), static_cast<std::uint32_t>(a_roleMask)));
+        const auto mask = static_cast<std::uint32_t>(a_roleMask);
+        // None -> match the scoped role in ANY labyrinth.
+        return ResolveActors(a_labyrinth ? state->Actors().GetByRole(a_labyrinth->GetFormID(), mask)
+                                         : state->Actors().GetByRoleAnywhere(mask));
     }
 
     // Tracked actors whose GLOBAL role mask matches ANY bit in a_roleMask (e.g. all

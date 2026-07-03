@@ -36,10 +36,16 @@ namespace GK {
         // form pointer re-supplied by Papyrus each load); never serialized, not Reset.
         [[nodiscard]] RE::TESQuest*& AliasQuest() { return _aliasQuest; }
 
-        // Transient alias-pool reservations: (quest FormID << 32 | alias ID) -> expiry.
-        // Guards the scan->ForceRefTo window so two Papyrus threads aren't handed the
-        // same free alias. Never serialized; entries expire or are consumed on fill.
-        [[nodiscard]] std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>& AliasReservations() {
+        // One pending alias-pool slot: who reserved it and until when.
+        struct AliasReservation {
+            std::chrono::steady_clock::time_point expiry;
+            RE::FormID actor = 0;  // lets hooks find the slot before the fill lands
+        };
+
+        // Transient alias-pool reservations: (quest FormID << 32 | alias ID) -> holder.
+        // Guards the reserve->ForceRefTo window so two Papyrus threads aren't handed
+        // the same free alias. Never serialized; entries expire or are consumed on fill.
+        [[nodiscard]] std::unordered_map<std::uint64_t, AliasReservation>& AliasReservations() {
             return _aliasReservations;
         }
 
@@ -64,6 +70,6 @@ namespace GK {
         ResourceRegistry _resources;
         ResourceKeywords _keywords;
         RE::TESQuest* _aliasQuest = nullptr;
-        std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> _aliasReservations;
+        std::unordered_map<std::uint64_t, AliasReservation> _aliasReservations;
     };
 }
