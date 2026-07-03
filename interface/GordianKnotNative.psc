@@ -27,15 +27,27 @@ Scriptname GordianKnotNative Hidden
 
   -- Tracking & persistence --
   A tracked actor needs persistence (to survive unload / cell reset / discovery)
-  AND its per-NPC driver script. Scan-discovered actors (wardens) get both from
-  the CK and are tracked directly by ScanAllLabyrinths. Every OTHER actor gets
-  both by being placed into a free GkNpc pool alias on the quest given to
-  ConfigureAliasQuest -- every ADDING mutator (AddActor, Set*/Add* role,
-  SetActorStatus) does this automatically for a new actor, even one that is
-  already persistent (it still needs the script). If no slot is free (or no alias
-  quest is configured) the mutator returns FALSE and the actor is NOT tracked.
-  CLEARING mutators (Remove*/Clear*) never track: clearing a role on an untracked
-  actor is a no-op.
+  AND its per-NPC driver script. EVERY new actor gets both the same way: it is
+  placed into a free GkNpc pool alias on the quest given to ConfigureAliasQuest
+  (the driver script is attached to the pool aliases in the CK -- never to actor
+  refs or bases). This happens automatically in every ADDING mutator (AddActor,
+  Set*/Add* role, SetActorStatus) AND for wardens discovered by
+  ScanAllLabyrinths, even for an actor that is already persistent (it still
+  needs the script). If no slot is free (or no alias quest is configured) the
+  mutator returns FALSE / the scan skips the warden, and the actor is NOT
+  tracked. CLEARING mutators (Remove*/Clear*) never track: clearing a role on an
+  untracked actor is a no-op.
+  The driver script (extends ReferenceAlias) gets an explicit constructor /
+  destructor pair, dispatched natively (declare only what you need; plain
+  Functions, not Events):
+    Function OnGKAssign(Actor akActor)   ; after the alias is force-filled
+    Function OnGKRelease(Actor akActor)  ; from ForgetActor, before the alias
+                                         ; is cleared -- keep it quick and
+                                         ; non-latent
+  Do NOT use OnInit as the constructor: it fires when the script INSTANCE is
+  created -- at quest start, with the alias still empty -- not when the alias
+  fills, and nothing fires on clear. Guard any OnInit logic against
+  GetActorReference() == None.
 
   Papyrus has no bitwise operators. Because the flags are distinct bits you can
   combine them by ADDING (1 + 4 = 5), or use SKSE's Math.LogicalOr / LogicalAnd
@@ -101,6 +113,30 @@ Int Function RoleWanderer() Global Native
 Int Function RoleWarden() Global Native
 Int Function RolePrisoner() Global Native
 
+; Human-readable summary of every role akActor holds -- global (Wanderer) plus
+; scoped roles held in ANY labyrinth -- as "Wanderer" / "Wanderer, Warden" / etc.
+; Empty string if the actor holds no role (or is untracked). Pure-Papyrus helper
+; composed from the natives above (debug/UI convenience, not perf-critical).
+String Function GetActorRolesAsString(Actor akActor) Global
+    String s = ""
+    If IsWanderer(akActor)
+        s = "Wanderer"
+    EndIf
+    If HasRoleAnywhere(akActor, RoleWarden())
+        If s != ""
+            s += ", "
+        EndIf
+        s += "Warden"
+    EndIf
+    If HasRoleAnywhere(akActor, RolePrisoner())
+        If s != ""
+            s += ", "
+        EndIf
+        s += "Prisoner"
+    EndIf
+    Return s
+EndFunction
+
 ; Set / get an actor's status code (0 = Idle; other values are Papyrus-defined).
 ; Status is global to the actor, not scoped to a labyrinth. Setting status on an
 ; untracked actor is an ADDER: False if the actor can't be tracked (see the header).
@@ -127,7 +163,9 @@ Bool Function HasRoleAnywhere(Actor akActor, Int aiRoleMask) Global Native
 Actor[] Function GetActorsByStatus(Int aiStatus) Global Native
 
 ; Drop an actor from native tracking entirely (all labyrinth associations + status).
-; Also releases the GkNpc pool alias holding it, if any (freeing the slot).
+; Also releases the GkNpc pool alias holding it, if any (freeing the slot): the
+; driver script's OnGKRelease(akActor) is called first (if declared -- see the
+; header), then the alias is cleared.
 Function ForgetActor(Actor akActor) Global Native
 
 ; =============================================================================
@@ -140,7 +178,13 @@ Function ForgetActor(Actor akActor) Global Native
 ;  - warden identifies an ACTOR reference placed as a labyrinth's warden: on
 ;    ScanAllLabyrinths it is tracked with the Warden role for the labyrinth its
 ;    linked-ref (via akWarden) points at.
-Function ConfigureKeywords(Keyword akCellDoor, Keyword akPatrolMarker, Keyword akFurniture, Keyword akInMarker, Keyword akOutMarker, Keyword akWarden) Global Native
+;  - wanderer identifies an ACTOR reference with the global Wanderer role: it
+;    belongs to no labyrinth, so its linked-ref (via akWanderer) may point at ANY
+;    reference -- the target is ignored. The linked ref is still required: it
+;    marks the role AND makes the ref persistent in the ESP, which is what lets
+;    the scan find it while its cell is unloaded.
+; An actor reference may carry both role linked-refs; it gets both roles.
+Function ConfigureKeywords(Keyword akCellDoor, Keyword akPatrolMarker, Keyword akFurniture, Keyword akInMarker, Keyword akOutMarker, Keyword akWarden, Keyword akWanderer) Global Native
 
 ; Register a labyrinth, identified directly by its anchor XMarker reference. Only
 ; stores the anchor's FormID, so the anchor's cell need not be loaded. The same
@@ -150,7 +194,10 @@ Function RegisterLabyrinth(ObjectReference akAnchor) Global Native
 ; One-shot global discovery across ALL registered labyrinths. Sweeps the whole
 ; form table, so it finds resources WITHOUT their cells being loaded -- but only
 ; PERSISTENT references (doors / patrol markers / furniture must be flagged
-; persistent in the CK). Call once after registration. Returns total matched.
+; persistent in the CK). Discovered warden AND wanderer actors are tracked
+; through the GkNpc alias pool like any other actor (see the header), so call
+; ConfigureAliasQuest BEFORE this or none is tracked. Call once after
+; registration. Returns total matched resources.
 Int Function ScanAllLabyrinths() Global Native
 
 ; True if akRef is a persistent reference (survives cell reset, is simulated off-screen,
@@ -163,12 +210,13 @@ Bool Function IsPersistent(ObjectReference akRef) Global Native
 ; =============================================================================
 ; Pool aliases are the ReferenceAliases on the configured quest whose name starts
 ; with "GkNpc". The native layer fills one automatically whenever an ADDING
-; mutator needs to track a non-persistent actor (see the header), and releases it
-; on ForgetActor -- there is no manual assign/free.
+; mutator or ScanAllLabyrinths needs to track a NEW actor (see the header), and
+; releases it on ForgetActor -- there is no manual assign/free.
 
 ; Supply the quest carrying the pool aliases. Call once per session alongside
-; ConfigureKeywords (a live pointer, re-supplied after each game load). Without
-; it, adders fail (return False) for any actor that isn't already persistent.
+; ConfigureKeywords, BEFORE ScanAllLabyrinths (a live pointer, re-supplied after
+; each game load). Without it, adders fail (return False) for any new actor and
+; the scan drops discovered wardens.
 Function ConfigureAliasQuest(Quest akQuest) Global Native
 
 ; Diagnostics: the alias ID of the pool alias currently holding akActor (-1 if

@@ -1,6 +1,7 @@
 #include "State/Labyrinth.h"
 
 #include "State/ActorRegistry.h"
+#include "State/AliasPool.h"
 #include "State/GameState.h"
 
 // =============================================================================
@@ -145,11 +146,13 @@ namespace GK {
         }
 
         // A reference carrying the warden keyword, whose linked-ref target is a
-        // registered anchor, is an ACTOR placed as that labyrinth's warden. Track it
-        // (creating the actor if new) with the scoped Warden role for that labyrinth.
-        // Returns true if a warden actor was recorded. The caller holds the lock.
+        // registered anchor, is an ACTOR placed as that labyrinth's warden. It is
+        // tracked through the SAME pool-alias gate as the Papyrus adders (the alias
+        // carries the driver script -- no CK-side script attachment needed), then
+        // recorded with the scoped Warden role for that labyrinth. Returns true if a
+        // warden actor was recorded. The caller holds the GameState lock.
         bool ClassifyWarden(RE::TESObjectREFR& a_ref, const ResourceKeywords& a_kw, const LabyrinthRegistry& a_labs,
-                            ActorRegistry& a_actors) {
+                            GameState& a_state) {
             const auto* tgt = a_ref.GetLinkedRef(a_kw.warden);
             if (!tgt || !a_labs.Contains(tgt->GetFormID())) {
                 return false;
@@ -159,9 +162,34 @@ namespace GK {
                 return false;  // warden keyword on a non-actor reference; ignore
             }
             const bool persistent = (a_ref.GetFormFlags() & RE::TESObjectREFR::RecordFlags::kPersistent) != 0;
+            if (!AliasPool::EnsureTrackable(a_state, *actor)) {
+                return false;  // no pool slot -> not tracked (EnsureTrackable logged why)
+            }
             logger::info("ScanAllForms: warden actor {:08X} -> labyrinth {:08X} (persistent={}).", actor->GetFormID(),
                          tgt->GetFormID(), persistent);
-            a_actors.AddRole(actor->GetFormID(), tgt->GetFormID(), Role::kWarden);
+            a_state.Actors().AddRole(actor->GetFormID(), tgt->GetFormID(), Role::kWarden);
+            return true;
+        }
+
+        // A reference carrying the wanderer keyword is an ACTOR with the global
+        // Wanderer role: it belongs to no labyrinth, so the linked-ref TARGET is
+        // ignored (the link only marks the role -- and makes the ref ESP-persistent,
+        // which is what lets this scan find it while its cell is unloaded). Same
+        // pool-alias gate as everything else. The caller holds the GameState lock.
+        bool ClassifyWanderer(RE::TESObjectREFR& a_ref, const ResourceKeywords& a_kw, GameState& a_state) {
+            if (!a_ref.GetLinkedRef(a_kw.wanderer)) {
+                return false;
+            }
+            auto* actor = a_ref.As<RE::Actor>();
+            if (!actor) {
+                return false;  // wanderer keyword on a non-actor reference; ignore
+            }
+            const bool persistent = (a_ref.GetFormFlags() & RE::TESObjectREFR::RecordFlags::kPersistent) != 0;
+            if (!AliasPool::EnsureTrackable(a_state, *actor)) {
+                return false;  // no pool slot -> not tracked (EnsureTrackable logged why)
+            }
+            logger::info("ScanAllForms: wanderer actor {:08X} (persistent={}).", actor->GetFormID(), persistent);
+            a_state.Actors().AddGlobalRole(actor->GetFormID(), Role::kWanderer);
             return true;
         }
     }
@@ -181,12 +209,18 @@ namespace GK {
             logger::warn("ScanAllForms: resource keywords not configured (call ConfigureKeywords first).");
             return 0;
         }
+        if (!state->AliasQuest()) {
+            // Resources still scan fine, but discovered actors go through the pool
+            // gate and would all be dropped.
+            logger::warn("ScanAllForms: no alias quest configured (call ConfigureAliasQuest first); "
+                         "discovered wardens/wanderers will NOT be tracked.");
+        }
 
         auto& reg = state->Resources();
-        auto& actors = state->Actors();
         std::uint32_t examined = 0;
         std::uint32_t matched = 0;
         std::uint32_t wardens = 0;
+        std::uint32_t wanderers = 0;
 
         // The global form table holds every INSTANTIATED form: all persistent
         // references at all times, plus temporaries of currently-loaded cells. So this
@@ -207,15 +241,21 @@ namespace GK {
                 ++examined;
                 if (ClassifyRef(*ref, kw, labs, reg)) {
                     ++matched;
-                } else if (ClassifyWarden(*ref, kw, labs, actors)) {
-                    ++wardens;
+                } else {
+                    // NOT else-if: an actor may carry both role keywords.
+                    if (ClassifyWarden(*ref, kw, labs, *state)) {
+                        ++wardens;
+                    }
+                    if (ClassifyWanderer(*ref, kw, *state)) {
+                        ++wanderers;
+                    }
                 }
             }
         }
 
-        logger::info(
-            "ScanAllForms: examined {} reference(s), matched {} resource(s) + {} warden actor(s) across {} labyrinth(s).",
-            examined, matched, wardens, labs.All().size());
+        logger::info("ScanAllForms: examined {} reference(s), matched {} resource(s) + {} warden(s) + {} wanderer(s) "
+                     "across {} labyrinth(s).",
+                     examined, matched, wardens, wanderers, labs.All().size());
         return static_cast<int>(matched);
     }
 }

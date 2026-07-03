@@ -39,7 +39,10 @@ namespace GK {
     // ConfigureKeywords (live BGSKeyword* pointers, not persisted — re-supplied by
     // Papyrus on load). cellDoor/patrolMarker/furniture/in/out identify resource
     // references; warden identifies an ACTOR reference placed as a labyrinth's warden
-    // (its linked-ref target is the labyrinth anchor).
+    // (its linked-ref target is the labyrinth anchor); wanderer identifies an ACTOR
+    // reference with the global Wanderer role — its linked-ref TARGET is ignored
+    // (wanderers belong to no labyrinth; the linked ref just marks the role and, as a
+    // side effect, makes the ref ESP-persistent so the scan can find it unloaded).
     struct ResourceKeywords {
         RE::BGSKeyword* cellDoor = nullptr;
         RE::BGSKeyword* patrolMarker = nullptr;
@@ -47,9 +50,10 @@ namespace GK {
         RE::BGSKeyword* inMarker = nullptr;
         RE::BGSKeyword* outMarker = nullptr;
         RE::BGSKeyword* warden = nullptr;
+        RE::BGSKeyword* wanderer = nullptr;
 
         [[nodiscard]] bool Valid() const {
-            return cellDoor && patrolMarker && furniture && inMarker && outMarker && warden;
+            return cellDoor && patrolMarker && furniture && inMarker && outMarker && warden && wanderer;
         }
     };
 
