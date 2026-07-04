@@ -446,6 +446,31 @@ namespace {
                     total - filled - reserved);
     }
 
+    void DrawQueuesTab(GK::GameState& a_state) {
+        const auto& queues = a_state.Queues().Queues();
+        if (queues.empty()) {
+            ImGui::TextUnformatted("No queues (a queue exists only while actors wait in it).");
+            return;
+        }
+        ImGui::Text("%zu queue(s)", queues.size());
+        for (const auto& [name, entries] : queues) {
+            if (!ImGui::TreeNode(name.c_str(), "%s (%zu waiting)", name.c_str(), entries.size())) {
+                continue;
+            }
+            // Front-to-back; #0 is what the next DequeueActor returns (unresolved
+            // entries get skipped there, so flag them here).
+            int pos = 0;
+            for (const auto id : entries) {
+                auto* form = RE::TESForm::LookupByID(id);
+                auto* actor = form ? form->As<RE::Actor>() : nullptr;
+                const char* note = !actor ? "  (unresolved - skipped at dequeue)" : (actor->IsDead() ? "  (dead)" : "");
+                ImGui::Text("#%d%s %s%s", pos, pos == 0 ? " (next)" : "", RefLabel(id).c_str(), note);
+                ++pos;
+            }
+            ImGui::TreePop();
+        }
+    }
+
     void DrawSessionTab(GK::GameState& a_state) {
         ImGui::SeparatorText("Config");
         const auto& kw = a_state.Keywords();
@@ -461,8 +486,8 @@ namespace {
                     a_state.AliasQuest() ? HexID(a_state.AliasQuest()->GetFormID()).c_str() : "(not set)");
 
         ImGui::SeparatorText("Counts");
-        ImGui::Text("actors: %zu   labyrinths: %zu", a_state.Actors().Records().size(),
-                    a_state.Labyrinths().All().size());
+        ImGui::Text("actors: %zu   labyrinths: %zu   queues: %zu", a_state.Actors().Records().size(),
+                    a_state.Labyrinths().All().size(), a_state.Queues().Queues().size());
         auto& reg = a_state.Resources();
         ImGui::Text("cells: %zu   markers: %zu   furniture: %zu   next handle: %d", reg.CellPool().All().size(),
                     reg.MarkerPool().All().size(), reg.FurniturePool().All().size(), reg.PeekNextHandle());
@@ -503,6 +528,10 @@ namespace {
             }
             if (ImGui::BeginTabItem("Alias Pool")) {
                 DrawAliasPoolTab(*state);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Queues")) {
+                DrawQueuesTab(*state);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Session")) {
