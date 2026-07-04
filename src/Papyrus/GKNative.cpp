@@ -289,6 +289,48 @@ namespace {
         return state->Actors().GetStatus(a_actor->GetFormID());
     }
 
+    // --- actor queues -----------------------------------------------------------
+    // Named FIFO queues: any String mints a queue on first use, so plugins define
+    // their own without enums or int mappings (names are case-insensitive, like
+    // Papyrus string compares). Queues are an independent utility: they don't
+    // track the actor, touch roles, or take a pool alias, and they persist in the
+    // co-save (see Serialization.cpp, QUEU).
+
+    bool EnqueueActor(RE::StaticFunctionTag*, std::string_view a_queue, RE::Actor* a_actor) {
+        if (!a_actor || a_queue.empty()) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return state->Queues().Enqueue(a_queue, a_actor->GetFormID());
+    }
+
+    RE::Actor* DequeueActor(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        // Entries that no longer resolve to an Actor (deleted / plugin removed
+        // mid-queue) are dropped so the next live actor comes out.
+        while (const auto id = state->Queues().Dequeue(a_queue)) {
+            auto* form = RE::TESForm::LookupByID(id);
+            if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
+                return actor;
+            }
+        }
+        return nullptr;
+    }
+
+    std::int32_t GetQueueSize(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return static_cast<std::int32_t>(state->Queues().Size(a_queue));
+    }
+
+    void ClearQueue(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Queues().ClearQueue(a_queue);
+    }
+
     // --- queries --------------------------------------------------------------
 
     std::vector<RE::Actor*> GetActorsByRole(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
@@ -607,6 +649,11 @@ namespace GK::Papyrus {
 
         a_vm->RegisterFunction("SetActorStatus", kClass, SetActorStatus);
         a_vm->RegisterFunction("GetActorStatus", kClass, GetActorStatus);
+
+        a_vm->RegisterFunction("EnqueueActor", kClass, EnqueueActor);
+        a_vm->RegisterFunction("DequeueActor", kClass, DequeueActor);
+        a_vm->RegisterFunction("GetQueueSize", kClass, GetQueueSize);
+        a_vm->RegisterFunction("ClearQueue", kClass, ClearQueue);
 
         a_vm->RegisterFunction("GetActorsByRole", kClass, GetActorsByRole);
         a_vm->RegisterFunction("GetActorsByGlobalRole", kClass, GetActorsByGlobalRole);

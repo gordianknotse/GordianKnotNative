@@ -25,6 +25,7 @@ namespace GK::Serialization {
 
     namespace Record {
         inline constexpr std::uint32_t kActor = FourCC('A', 'C', 'T', 'R');  // Phase 2
+        inline constexpr std::uint32_t kQueue = FourCC('Q', 'U', 'E', 'U');  // named actor FIFO queues
         // Phase 5 (reserved): 'NEXT' handle counter, 'LABY', 'CELL', 'MARK',
         //                     'FURN', 'ORPH'.
     }
@@ -35,5 +36,8 @@ namespace GK::Serialization {
         // Older saves load best-effort: v1 drops roles (keeps status); v2 loads
         // scoped roles with an empty global mask.
         inline constexpr std::uint32_t kActor = 3;
+        // v1: queueCount, then per queue: nameLen, name bytes (case-folded, no
+        // terminator), entryCount, actor FormIDs front-to-back.
+        inline constexpr std::uint32_t kQueue = 1;
     }
 }

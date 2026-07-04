@@ -2,6 +2,7 @@
 
 #include "State/ActorRegistry.h"
 #include "State/Labyrinth.h"
+#include "State/QueueRegistry.h"
 #include "State/ResourceRegistry.h"
 
 #include <chrono>
@@ -29,6 +30,7 @@ namespace GK {
 
         [[nodiscard]] ActorRegistry& Actors() { return _actors; }
         [[nodiscard]] LabyrinthRegistry& Labyrinths() { return _labyrinths; }
+        [[nodiscard]] QueueRegistry& Queues() { return _queues; }
         [[nodiscard]] ResourceRegistry& Resources() { return _resources; }
         [[nodiscard]] ResourceKeywords& Keywords() { return _keywords; }
 
@@ -67,6 +69,7 @@ namespace GK {
         std::recursive_mutex _mutex;
         ActorRegistry _actors;
         LabyrinthRegistry _labyrinths;
+        QueueRegistry _queues;
         ResourceRegistry _resources;
         ResourceKeywords _keywords;
         RE::TESQuest* _aliasQuest = nullptr;

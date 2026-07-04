@@ -197,6 +197,31 @@ Actor[] Function GetActorsByStatus(Int aiStatus) Global Native
 Function ForgetActor(Actor akActor) Global Native
 
 ; =============================================================================
+; Actor queues  (asQueue is a free-form queue name)
+; =============================================================================
+; Named FIFO queues of actors. Any String mints a queue on first use, so plugins
+; can define their own queues without enums or int mappings. Names are
+; case-insensitive (like Papyrus string compares). Queues are independent of
+; tracking/roles -- enqueueing does NOT track the actor or take a pool alias --
+; and their contents persist across save/load.
+
+; Append akActor to the back of asQueue. False if akActor is None, asQueue is
+; empty (""), or the actor is already waiting in that queue -- an actor sits in
+; a given queue at most once, but may wait in any number of DIFFERENT queues.
+Bool Function EnqueueActor(String asQueue, Actor akActor) Global Native
+
+; Pop and return the actor at the front of asQueue, or None if it is empty.
+; Entries that no longer resolve (actor deleted / its plugin removed) are
+; silently skipped, so the next live actor in line comes out.
+Actor Function DequeueActor(String asQueue) Global Native
+
+; How many actors are waiting in asQueue (0 if it was never used or is drained).
+Int Function GetQueueSize(String asQueue) Global Native
+
+; Empty asQueue, dropping every waiting actor.
+Function ClearQueue(String asQueue) Global Native
+
+; =============================================================================
 ; Configuration & labyrinth lifecycle
 ; =============================================================================
 

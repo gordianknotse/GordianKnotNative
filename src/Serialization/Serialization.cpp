@@ -16,6 +16,7 @@ namespace {
     using GK::ActorRecord;
     using GK::ActorRegistry;
     using GK::GameState;
+    using GK::QueueRegistry;
     namespace Record = GK::Serialization::Record;
     namespace Version = GK::Serialization::Version;
 
@@ -100,12 +101,72 @@ namespace {
                      dropped, droppedLabs);
     }
 
+    // --- QUEU -----------------------------------------------------------------
+
+    void SaveQueues(const SKSE::SerializationInterface* a_intfc, const QueueRegistry& a_queues) {
+        if (!a_intfc->OpenRecord(Record::kQueue, Version::kQueue)) {
+            logger::error("Serialization: failed to open QUEU record.");
+            return;
+        }
+
+        const auto& queues = a_queues.Queues();
+        a_intfc->WriteRecordData(static_cast<std::uint32_t>(queues.size()));
+        for (const auto& [name, entries] : queues) {
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(name.size()));
+            a_intfc->WriteRecordData(name.data(), static_cast<std::uint32_t>(name.size()));
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(entries.size()));
+            for (const auto id : entries) {
+                a_intfc->WriteRecordData(id);
+            }
+        }
+        logger::info("Serialization: wrote {} actor queue(s).", queues.size());
+    }
+
+    void LoadQueues(const SKSE::SerializationInterface* a_intfc, std::uint32_t a_version, QueueRegistry& a_queues) {
+        if (a_version > Version::kQueue) {
+            logger::warn("Serialization: QUEU version {} newer than {}; best-effort load.", a_version, Version::kQueue);
+        }
+
+        std::uint32_t queueCount = 0;
+        a_intfc->ReadRecordData(queueCount);
+
+        std::uint32_t loaded = 0;
+        std::uint32_t dropped = 0;
+        for (std::uint32_t i = 0; i < queueCount; ++i) {
+            std::uint32_t nameLen = 0;
+            a_intfc->ReadRecordData(nameLen);
+            std::string name(nameLen, '\0');
+            if (nameLen > 0) {
+                a_intfc->ReadRecordData(name.data(), nameLen);
+            }
+
+            std::uint32_t entryCount = 0;
+            a_intfc->ReadRecordData(entryCount);
+            std::deque<RE::FormID> entries;
+            for (std::uint32_t j = 0; j < entryCount; ++j) {
+                RE::FormID oldID = 0;
+                a_intfc->ReadRecordData(oldID);
+                // Load order can shift between saves — remap the stored FormID.
+                RE::FormID newID = 0;
+                if (a_intfc->ResolveFormID(oldID, newID)) {
+                    entries.push_back(newID);
+                } else {
+                    ++dropped;  // actor deleted or its plugin removed
+                }
+            }
+            loaded += static_cast<std::uint32_t>(entries.size());
+            a_queues.Put(name, std::move(entries));  // Put skips a fully-dropped queue
+        }
+        logger::info("Serialization: loaded {} queue(s) with {} entr(ies) ({} dropped).", queueCount, loaded, dropped);
+    }
+
     // --- callbacks ------------------------------------------------------------
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc) {
         auto* state = GameState::GetSingleton();
         auto lock = state->Lock();
         SaveActors(a_intfc, state->Actors());
+        SaveQueues(a_intfc, state->Queues());
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -119,6 +180,9 @@ namespace {
             switch (type) {
             case Record::kActor:
                 LoadActors(a_intfc, version, state->Actors());
+                break;
+            case Record::kQueue:
+                LoadQueues(a_intfc, version, state->Queues());
                 break;
             default:
                 logger::warn("Serialization: unknown record {:08X} (len {}); skipping.", type, length);
