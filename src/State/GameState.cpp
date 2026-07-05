@@ -9,6 +9,7 @@ namespace GK {
     void GameState::Reset() {
         auto lock = Lock();
         _actors.Clear();
+        _attributes.Clear();
         _labyrinths.Clear();
         _queues.Clear();
         _resources.Clear();

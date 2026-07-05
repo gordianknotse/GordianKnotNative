@@ -27,6 +27,11 @@ namespace GK {
         // to skip (see the DequeueActor binding in GKNative.cpp).
         RE::FormID Dequeue(std::string_view a_queue);
 
+        // Put a_actor back at the FRONT of the named queue: undoes a Dequeue when
+        // a compound operation fails after popping (no dedupe -- the caller just
+        // popped this entry).
+        void PushFront(std::string_view a_queue, RE::FormID a_actor);
+
         // Waiting entries in the named queue (0 if it doesn't exist).
         [[nodiscard]] std::size_t Size(std::string_view a_queue) const;
 
@@ -44,10 +49,6 @@ namespace GK {
         [[nodiscard]] const std::unordered_map<std::string, std::deque<RE::FormID>>& Queues() const { return _queues; }
 
     private:
-        // Lowercased copy of a_queue: the map key (Papyrus strings compare
-        // case-insensitively, so "MyQueue" and "myqueue" must be one queue).
-        [[nodiscard]] static std::string Fold(std::string_view a_queue);
-
         std::unordered_map<std::string, std::deque<RE::FormID>> _queues;
     };
 }

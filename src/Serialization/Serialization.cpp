@@ -15,6 +15,7 @@
 namespace {
     using GK::ActorRecord;
     using GK::ActorRegistry;
+    using GK::AttributeRegistry;
     using GK::GameState;
     using GK::QueueRegistry;
     namespace Record = GK::Serialization::Record;
@@ -31,10 +32,12 @@ namespace {
         const auto& records = a_actors.Records();
         a_intfc->WriteRecordData(static_cast<std::uint32_t>(records.size()));
         // Field-by-field (not the raw struct) so the schema is robust to layout.
-        // v3 layout per actor: id, status, globalRoles, labCount, [labAnchorID, mask]*.
+        // v4 layout per actor: id, statusLen, status bytes (no terminator),
+        // globalRoles, labCount, [labAnchorID, mask]*.
         for (const auto& [id, rec] : records) {
             a_intfc->WriteRecordData(id);
-            a_intfc->WriteRecordData(rec.status);
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(rec.status.size()));
+            a_intfc->WriteRecordData(rec.status.data(), static_cast<std::uint32_t>(rec.status.size()));
             a_intfc->WriteRecordData(rec.globalRoles);
             a_intfc->WriteRecordData(static_cast<std::uint32_t>(rec.rolesByLab.size()));
             for (const auto& [lab, mask] : rec.rolesByLab) {
@@ -62,7 +65,24 @@ namespace {
             a_intfc->ReadRecordData(oldID);
 
             if (a_version >= 2) {
-                a_intfc->ReadRecordData(rec.status);
+                if (a_version >= 4) {
+                    std::uint32_t statusLen = 0;
+                    a_intfc->ReadRecordData(statusLen);
+                    rec.status.assign(statusLen, '\0');
+                    if (statusLen > 0) {
+                        a_intfc->ReadRecordData(rec.status.data(), statusLen);
+                    } else {
+                        rec.status = GK::Status::kIdle;  // early-v4 saves stored "" for idle
+                    }
+                } else {
+                    // Pre-v4: an int32 status code. Keep its decimal spelling so
+                    // nothing is silently lost (0 = idle -> the "idle" default).
+                    std::int32_t legacyStatus = 0;
+                    a_intfc->ReadRecordData(legacyStatus);
+                    if (legacyStatus != 0) {
+                        rec.status = std::to_string(legacyStatus);
+                    }
+                }
                 if (a_version >= 3) {
                     a_intfc->ReadRecordData(rec.globalRoles);  // v3+: global (Wanderer) mask
                 }
@@ -82,10 +102,15 @@ namespace {
                 }
             } else {
                 // v1: a single unscoped role mask we can't attribute to a labyrinth.
-                // Consume it (keep the stream aligned) and keep only status.
+                // Consume it (keep the stream aligned) and keep only status (an
+                // int32 code back then; keep its decimal spelling, 0 -> "idle").
                 std::uint32_t legacyRoles = 0;
                 a_intfc->ReadRecordData(legacyRoles);
-                a_intfc->ReadRecordData(rec.status);
+                std::int32_t legacyStatus = 0;
+                a_intfc->ReadRecordData(legacyStatus);
+                if (legacyStatus != 0) {
+                    rec.status = std::to_string(legacyStatus);
+                }
             }
 
             // Load order can shift between saves — remap the stored FormID.
@@ -99,6 +124,78 @@ namespace {
         }
         logger::info("Serialization: loaded {} actor record(s) ({} dropped, {} labyrinth assoc dropped).", loaded,
                      dropped, droppedLabs);
+    }
+
+    // --- ATTR -----------------------------------------------------------------
+
+    void SaveAttributes(const SKSE::SerializationInterface* a_intfc, const AttributeRegistry& a_attributes) {
+        if (!a_intfc->OpenRecord(Record::kAttribute, Version::kAttribute)) {
+            logger::error("Serialization: failed to open ATTR record.");
+            return;
+        }
+
+        const auto& actors = a_attributes.Actors();
+        a_intfc->WriteRecordData(static_cast<std::uint32_t>(actors.size()));
+        for (const auto& [id, attrs] : actors) {
+            a_intfc->WriteRecordData(id);
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(attrs.size()));
+            for (const auto& [key, value] : attrs) {
+                a_intfc->WriteRecordData(static_cast<std::uint32_t>(key.size()));
+                a_intfc->WriteRecordData(key.data(), static_cast<std::uint32_t>(key.size()));
+                a_intfc->WriteRecordData(value);
+            }
+        }
+        logger::info("Serialization: wrote attributes for {} actor(s).", actors.size());
+    }
+
+    void LoadAttributes(const SKSE::SerializationInterface* a_intfc, std::uint32_t a_version,
+                        AttributeRegistry& a_attributes) {
+        if (a_version > Version::kAttribute) {
+            logger::warn("Serialization: ATTR version {} newer than {}; best-effort load.", a_version,
+                         Version::kAttribute);
+        }
+
+        std::uint32_t actorCount = 0;
+        a_intfc->ReadRecordData(actorCount);
+
+        std::uint32_t loaded = 0;
+        std::uint32_t dropped = 0;
+        std::uint32_t droppedActors = 0;
+        for (std::uint32_t i = 0; i < actorCount; ++i) {
+            RE::FormID oldID = 0;
+            a_intfc->ReadRecordData(oldID);
+
+            std::uint32_t attrCount = 0;
+            a_intfc->ReadRecordData(attrCount);
+            AttributeRegistry::AttributeMap attrs;
+            for (std::uint32_t j = 0; j < attrCount; ++j) {
+                std::uint32_t keyLen = 0;
+                a_intfc->ReadRecordData(keyLen);
+                std::string key(keyLen, '\0');
+                if (keyLen > 0) {
+                    a_intfc->ReadRecordData(key.data(), keyLen);
+                }
+                RE::FormID oldValue = 0;
+                a_intfc->ReadRecordData(oldValue);
+                // Load order can shift between saves — remap the stored FormID.
+                RE::FormID newValue = 0;
+                if (a_intfc->ResolveFormID(oldValue, newValue)) {
+                    attrs[std::move(key)] = newValue;
+                } else {
+                    ++dropped;  // value reference deleted or its plugin removed
+                }
+            }
+
+            RE::FormID newID = 0;
+            if (!a_intfc->ResolveFormID(oldID, newID)) {
+                ++droppedActors;  // actor deleted or its plugin removed
+                continue;
+            }
+            loaded += static_cast<std::uint32_t>(attrs.size());
+            a_attributes.Put(newID, std::move(attrs));  // Put skips a fully-dropped map
+        }
+        logger::info("Serialization: loaded {} attribute(s) across {} actor(s) ({} value(s), {} actor(s) dropped).",
+                     loaded, actorCount, dropped, droppedActors);
     }
 
     // --- QUEU -----------------------------------------------------------------
@@ -166,6 +263,7 @@ namespace {
         auto* state = GameState::GetSingleton();
         auto lock = state->Lock();
         SaveActors(a_intfc, state->Actors());
+        SaveAttributes(a_intfc, state->Attributes());
         SaveQueues(a_intfc, state->Queues());
     }
 
@@ -180,6 +278,9 @@ namespace {
             switch (type) {
             case Record::kActor:
                 LoadActors(a_intfc, version, state->Actors());
+                break;
+            case Record::kAttribute:
+                LoadAttributes(a_intfc, version, state->Attributes());
                 break;
             case Record::kQueue:
                 LoadQueues(a_intfc, version, state->Queues());

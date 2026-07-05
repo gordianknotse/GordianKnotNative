@@ -24,8 +24,9 @@ namespace GK::Serialization {
     inline constexpr std::uint32_t kUniqueID = FourCC('G', 'K', 'N', 'T');
 
     namespace Record {
-        inline constexpr std::uint32_t kActor = FourCC('A', 'C', 'T', 'R');  // Phase 2
-        inline constexpr std::uint32_t kQueue = FourCC('Q', 'U', 'E', 'U');  // named actor FIFO queues
+        inline constexpr std::uint32_t kActor = FourCC('A', 'C', 'T', 'R');      // Phase 2
+        inline constexpr std::uint32_t kAttribute = FourCC('A', 'T', 'T', 'R');  // per-actor keyed attributes
+        inline constexpr std::uint32_t kQueue = FourCC('Q', 'U', 'E', 'U');      // named actor FIFO queues
         // Phase 5 (reserved): 'NEXT' handle counter, 'LABY', 'CELL', 'MARK',
         //                     'FURN', 'ORPH'.
     }
@@ -33,9 +34,14 @@ namespace GK::Serialization {
     namespace Version {
         // v1: single role mask per actor. v2: roles scoped per labyrinth (map
         // anchor-FormID -> mask). v3: adds a per-actor global role mask (Wanderer).
+        // v4: status is a String (len + bytes) instead of an int32 code.
         // Older saves load best-effort: v1 drops roles (keeps status); v2 loads
-        // scoped roles with an empty global mask.
-        inline constexpr std::uint32_t kActor = 3;
+        // scoped roles with an empty global mask; pre-v4 int statuses load as
+        // their decimal spelling (0 -> "idle").
+        inline constexpr std::uint32_t kActor = 4;
+        // v1: actorCount, then per actor: actorID, attrCount, then per attribute:
+        // keyLen, key bytes (case-folded, no terminator), value FormID.
+        inline constexpr std::uint32_t kAttribute = 1;
         // v1: queueCount, then per queue: nameLen, name bytes (case-folded, no
         // terminator), entryCount, actor FormIDs front-to-back.
         inline constexpr std::uint32_t kQueue = 1;

@@ -74,8 +74,11 @@ Scriptname GordianKnotNative Hidden
 ; never hardcode them (e.g. GordianKnotNative.RolePrisoner()).
 ;
 ; -- Status --
-;   0 = Idle. Any other Int is a "busy" code; Papyrus owns that vocabulary.
-;   Status is GLOBAL to the actor (one thing at a time), not per-labyrinth.
+;   A free-form String; Papyrus owns that vocabulary, no enums or int codes
+;   needed. Newly tracked actors start as "idle", and an empty String ("") is
+;   treated as "idle" everywhere a status is accepted. Compared
+;   case-insensitively (like Papyrus string compares). Status is GLOBAL to the
+;   actor (one thing at a time), not per-labyrinth.
 
 ; =============================================================================
 ; Actors  (the player and tracked NPCs are handled identically here)
@@ -106,7 +109,9 @@ Int Function GetActorRoles(Actor akActor, ObjectReference akLabyrinth) Global Na
 
 ; Scoped convenience tests / set / clear, for one labyrinth. Other roles -- in this
 ; and every other labyrinth -- are left intact. Set* returns False if the actor
-; can't be tracked (see the header).
+; can't be tracked (see the header). For the Is* tests, pass akLabyrinth = None
+; to test the role in ANY labyrinth (like GetActorsByRole); Set*/Clear* still
+; require a specific labyrinth.
 Bool Function IsWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
 Bool Function IsPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 Bool Function SetWarden(Actor akActor, ObjectReference akLabyrinth) Global Native
@@ -164,11 +169,40 @@ String Function GetActorRolesAsString(Actor akActor) Global
     Return s
 EndFunction
 
-; Set / get an actor's status code (0 = Idle; other values are Papyrus-defined).
-; Status is global to the actor, not scoped to a labyrinth. Setting status on an
-; untracked actor is an ADDER: False if the actor can't be tracked (see the header).
-Bool Function SetActorStatus(Actor akActor, Int aiStatus) Global Native
-Int Function GetActorStatus(Actor akActor) Global Native
+; Set / get an actor's status: a free-form String (see the header; "idle" is
+; the default and "" is treated as "idle"). Status is global to the actor, not
+; scoped to a labyrinth. Setting status on an untracked actor is an ADDER:
+; False if the actor can't be tracked (see the header). GetActorStatus reads
+; back with the casing it was set with.
+Bool Function SetActorStatus(Actor akActor, String asStatus) Global Native
+String Function GetActorStatus(Actor akActor) Global Native
+
+; Put akActor back to the "idle" status. Clearing never tracks: on an
+; untracked actor this is a no-op.
+Function ClearActorStatus(Actor akActor) Global Native
+
+; True if akActor's status equals asStatus (compared case-insensitively).
+; An untracked actor's status is "idle"; a None actor always returns False.
+Bool Function IsActorStatus(Actor akActor, String asStatus) Global Native
+
+; IsActorStatus(akActor, "idle") shorthand.
+Bool Function IsActorIdle(Actor akActor) Global Native
+
+; Atomically claim an idle actor: finds a tracked actor whose status is "idle"
+; and who is CALM -- alive, not in combat, and not searching for an enemy
+; (suspicious) -- sets its status to asNewStatus, and returns it. The find, the
+; combat check, and the transition all happen under one native lock, so two
+; scripts can never claim the same actor. The player is never returned.
+; None if no idle, calm actor is available.
+Actor Function GetIdleActorAndTransitionTo(String asNewStatus) Global Native
+
+; Claim from a queue for a SPECIFIC idle actor: if akActor's status is "idle"
+; AND asQueue yields a live actor, transition akActor to asNewStatus and
+; return the dequeued actor -- atomically, under one native lock. Returns None
+; -- and changes NOTHING (the queue keeps its entries) -- when akActor is None
+; or not idle, when the queue is empty (or holds only stale entries), or when
+; akActor could not be tracked (transitioning is an ADDER, see the header).
+Actor Function TransitionIdleActorToAndDequeue(Actor akActor, String asQueue, String asNewStatus) Global Native
 
 ; Tracked actors whose SCOPED role mask in akLabyrinth matches ANY bit in aiRoleMask.
 ; Pass akLabyrinth = None to match the role in ANY labyrinth (each actor listed once).
@@ -187,8 +221,8 @@ ObjectReference[] Function GetLabyrinthsByActorRole(Actor akActor, Int aiRoleMas
 ; (so it works for both Wanderer and the scoped roles).
 Bool Function HasRoleAnywhere(Actor akActor, Int aiRoleMask) Global Native
 
-; Tracked actors whose status equals aiStatus.
-Actor[] Function GetActorsByStatus(Int aiStatus) Global Native
+; Tracked actors whose status equals asStatus (compared case-insensitively).
+Actor[] Function GetActorsByStatus(String asStatus) Global Native
 
 ; Drop an actor from native tracking entirely (all labyrinth associations + status).
 ; Also releases the GkNpc pool alias holding it, if any (freeing the slot): the
@@ -220,6 +254,24 @@ Int Function GetQueueSize(String asQueue) Global Native
 
 ; Empty asQueue, dropping every waiting actor.
 Function ClearQueue(String asQueue) Global Native
+
+; =============================================================================
+; Actor attributes  (asKey is a free-form attribute name)
+; =============================================================================
+; Per-actor key/value store: any String key holds one ObjectReference value per
+; actor, so plugins can define their own attributes without enums or int
+; mappings. Keys are case-insensitive (like Papyrus string compares).
+; Attributes are independent of tracking/roles -- setting one does NOT track the
+; actor or take a pool alias -- and they persist across save/load.
+
+; Set akActor's asKey attribute to akValue, overwriting any previous value.
+; Pass akValue = None to clear the attribute. No-op if akActor is None or asKey
+; is empty ("").
+Function SetActorAttribute(Actor akActor, String asKey, ObjectReference akValue) Global Native
+
+; akActor's asKey attribute, or None if it was never set, was cleared, or the
+; stored reference no longer resolves (deleted / its plugin removed).
+ObjectReference Function GetActorAttribute(Actor akActor, String asKey) Global Native
 
 ; =============================================================================
 ; Configuration & labyrinth lifecycle

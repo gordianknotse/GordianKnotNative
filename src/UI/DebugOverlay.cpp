@@ -217,8 +217,8 @@ namespace {
         }
 
         ImGui::SeparatorText("Raw record");
-        ImGui::Text("globalRoles: 0x%08X (%s)    status: %d", a_rec.globalRoles, RoleNames(a_rec.globalRoles).c_str(),
-                    a_rec.status);
+        ImGui::Text("globalRoles: 0x%08X (%s)    status: \"%s\"", a_rec.globalRoles,
+                    RoleNames(a_rec.globalRoles).c_str(), a_rec.status.c_str());
         for (const auto& [lab, mask] : a_rec.rolesByLab) {
             ImGui::Text("  lab %s -> 0x%X (%s)", RefLabel(lab).c_str(), mask, RoleNames(mask).c_str());
         }
@@ -268,7 +268,7 @@ namespace {
             ImGui::TableSetupColumn("FormID", ImGuiTableColumnFlags_WidthFixed, 80.0f);
             ImGui::TableSetupColumn("Name");
             ImGui::TableSetupColumn("Roles");
-            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 80.0f);
             ImGui::TableSetupColumn("Alias");
             ImGui::TableSetupColumn("3D", ImGuiTableColumnFlags_WidthFixed, 30.0f);
             ImGui::TableHeadersRow();
@@ -308,7 +308,7 @@ namespace {
                 ImGui::TableSetColumnIndex(2);
                 ImGui::TextUnformatted(roles.c_str());
                 ImGui::TableSetColumnIndex(3);
-                ImGui::Text("%d", rec.status);
+                ImGui::TextUnformatted(rec.status.empty() ? "-" : rec.status.c_str());
                 ImGui::TableSetColumnIndex(4);
                 ImGui::TextUnformatted(AliasColumnFor(a_state, id).c_str());
                 ImGui::TableSetColumnIndex(5);

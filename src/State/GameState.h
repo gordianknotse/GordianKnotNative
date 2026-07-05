@@ -1,6 +1,7 @@
 #pragma once
 
 #include "State/ActorRegistry.h"
+#include "State/AttributeRegistry.h"
 #include "State/Labyrinth.h"
 #include "State/QueueRegistry.h"
 #include "State/ResourceRegistry.h"
@@ -29,6 +30,7 @@ namespace GK {
         [[nodiscard]] std::unique_lock<std::recursive_mutex> Lock() { return std::unique_lock(_mutex); }
 
         [[nodiscard]] ActorRegistry& Actors() { return _actors; }
+        [[nodiscard]] AttributeRegistry& Attributes() { return _attributes; }
         [[nodiscard]] LabyrinthRegistry& Labyrinths() { return _labyrinths; }
         [[nodiscard]] QueueRegistry& Queues() { return _queues; }
         [[nodiscard]] ResourceRegistry& Resources() { return _resources; }
@@ -68,6 +70,7 @@ namespace GK {
 
         std::recursive_mutex _mutex;
         ActorRegistry _actors;
+        AttributeRegistry _attributes;
         LabyrinthRegistry _labyrinths;
         QueueRegistry _queues;
         ResourceRegistry _resources;

@@ -1,5 +1,7 @@
 #include "State/ActorRegistry.h"
 
+#include "State/CaseFold.h"
+
 namespace GK {
     void ActorRegistry::AddGlobalRole(RE::FormID a_actor, std::uint32_t a_role) {
         GetOrCreate(a_actor).globalRoles |= a_role;  // creates the actor even if a_role is 0
@@ -71,13 +73,20 @@ namespace GK {
         return lit != it->second.rolesByLab.end() ? lit->second : Role::kNone;
     }
 
-    void ActorRegistry::SetStatus(RE::FormID a_actor, std::int32_t a_status) {
-        GetOrCreate(a_actor).status = a_status;
+    void ActorRegistry::SetStatus(RE::FormID a_actor, std::string_view a_status) {
+        GetOrCreate(a_actor).status = Status::Normalize(a_status);
     }
 
-    std::int32_t ActorRegistry::GetStatus(RE::FormID a_actor) const {
+    void ActorRegistry::ClearStatus(RE::FormID a_actor) {
         const auto it = _records.find(a_actor);
-        return it != _records.end() ? it->second.status : Status::kIdle;
+        if (it != _records.end()) {  // clearing never tracks: untracked actor is a no-op
+            it->second.status = Status::kIdle;
+        }
+    }
+
+    std::string ActorRegistry::GetStatus(RE::FormID a_actor) const {
+        const auto it = _records.find(a_actor);
+        return it != _records.end() ? it->second.status : std::string(Status::kIdle);
     }
 
     std::vector<RE::FormID> ActorRegistry::GetByRole(RE::FormID a_lab, std::uint32_t a_roleMask) const {
@@ -104,10 +113,11 @@ namespace GK {
         return out;
     }
 
-    std::vector<RE::FormID> ActorRegistry::GetByStatus(std::int32_t a_status) const {
+    std::vector<RE::FormID> ActorRegistry::GetByStatus(std::string_view a_status) const {
+        const auto folded = FoldCase(Status::Normalize(a_status));
         std::vector<RE::FormID> out;
         for (const auto& [id, rec] : _records) {
-            if (rec.status == a_status) {
+            if (FoldCase(rec.status) == folded) {
                 out.push_back(id);
             }
         }

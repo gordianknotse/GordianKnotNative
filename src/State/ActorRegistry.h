@@ -2,6 +2,8 @@
 
 #include "State/ActorState.h"
 
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -34,16 +36,21 @@ namespace GK {
         void RemoveRole(RE::FormID a_actor, RE::FormID a_lab, std::uint32_t a_role);
         [[nodiscard]] std::uint32_t GetRoles(RE::FormID a_actor, RE::FormID a_lab) const;
 
-        void SetStatus(RE::FormID a_actor, std::int32_t a_status);
-        [[nodiscard]] std::int32_t GetStatus(RE::FormID a_actor) const;
+        // Status is a free-form Papyrus-owned String ("idle" = default; "" is
+        // normalized to "idle"); see ActorState.h. SetStatus is an adder (tracks);
+        // ClearStatus resets to idle and, like all clearing mutators, never tracks.
+        void SetStatus(RE::FormID a_actor, std::string_view a_status);
+        void ClearStatus(RE::FormID a_actor);
+        [[nodiscard]] std::string GetStatus(RE::FormID a_actor) const;
 
         // FormIDs of every tracked actor whose role mask in a_lab intersects a_roleMask.
         [[nodiscard]] std::vector<RE::FormID> GetByRole(RE::FormID a_lab, std::uint32_t a_roleMask) const;
         // FormIDs of every tracked actor whose scoped role mask in ANY labyrinth
         // intersects a_roleMask (each actor listed once).
         [[nodiscard]] std::vector<RE::FormID> GetByRoleAnywhere(std::uint32_t a_roleMask) const;
-        // FormIDs of every tracked actor whose status equals a_status.
-        [[nodiscard]] std::vector<RE::FormID> GetByStatus(std::int32_t a_status) const;
+        // FormIDs of every tracked actor whose status equals a_status (compared
+        // case-insensitively, like Papyrus strings).
+        [[nodiscard]] std::vector<RE::FormID> GetByStatus(std::string_view a_status) const;
 
         // Anchor FormIDs of every labyrinth in which a_actor holds any (scoped) role.
         [[nodiscard]] std::vector<RE::FormID> GetLabyrinths(RE::FormID a_actor) const;

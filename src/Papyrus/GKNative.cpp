@@ -1,6 +1,7 @@
 #include "Papyrus/GKNative.h"
 
 #include "State/AliasPool.h"
+#include "State/CaseFold.h"
 #include "State/GameState.h"
 #include "State/Labyrinth.h"
 #include "State/RoleFactions.h"
@@ -141,13 +142,17 @@ namespace {
         return static_cast<std::int32_t>(state->Actors().GetGlobalRoles(a_actor->GetFormID()));
     }
 
-    // Shared body for the scoped Is<Role> tests (Warden/Prisoner in one labyrinth).
+    // Shared body for the scoped Is<Role> tests (Warden/Prisoner). a_labyrinth =
+    // nullptr means "in ANY labyrinth" (same convention as GetActorsByRole).
     bool HasRoleIn(RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth, std::uint32_t a_flag) {
-        if (!a_actor || !a_labyrinth) {
+        if (!a_actor) {
             return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (!a_labyrinth) {
+            return state->Actors().HasRoleAnywhere(a_actor->GetFormID(), a_flag);
+        }
         return (state->Actors().GetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID()) & a_flag) != 0;
     }
 
@@ -266,8 +271,13 @@ namespace {
     std::int32_t RolePrisoner(RE::StaticFunctionTag*) { return static_cast<std::int32_t>(GK::Role::kPrisoner); }
 
     // --- status ---------------------------------------------------------------
+    // Status is an opaque, Papyrus-owned String vocabulary, global to the actor.
+    // "idle" is the default for newly tracked actors; an empty String is treated
+    // as "idle" everywhere. Compared case-insensitively (like Papyrus string
+    // compares) but stored as set, so GetActorStatus reads back with the caller's
+    // casing.
 
-    bool SetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_status) {
+    bool SetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_status) {
         if (!a_actor) {
             return false;
         }
@@ -280,13 +290,66 @@ namespace {
         return true;
     }
 
-    std::int32_t GetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+    std::string GetActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
-            return GK::Status::kIdle;
+            return std::string(GK::Status::kIdle);
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         return state->Actors().GetStatus(a_actor->GetFormID());
+    }
+
+    void ClearActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Actors().ClearStatus(a_actor->GetFormID());
+    }
+
+    bool IsActorStatus(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_status) {
+        if (!a_actor) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return GK::FoldCase(state->Actors().GetStatus(a_actor->GetFormID())) ==
+               GK::FoldCase(GK::Status::Normalize(a_status));
+    }
+
+    bool IsActorIdle(RE::StaticFunctionTag* a_tag, RE::Actor* a_actor) {
+        return IsActorStatus(a_tag, a_actor, GK::Status::kIdle);
+    }
+
+    // Atomically claim an idle actor: find a tracked actor whose status is idle
+    // and who is calm -- alive, not in combat, and not searching for an enemy
+    // (suspicious) -- set its status to a_newStatus, and return it. Find + check +
+    // transition all happen under the one GameState lock, so two Papyrus threads
+    // can never claim the same actor. The player is never returned.
+    RE::Actor* GetIdleActorAndTransitionTo(RE::StaticFunctionTag*, std::string_view a_newStatus) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        for (const auto& [id, rec] : state->Actors().Records()) {
+            if (id == 0x14 || GK::FoldCase(rec.status) != GK::Status::kIdle) {
+                continue;
+            }
+            auto* form = RE::TESForm::LookupByID(id);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            if (!actor || actor->IsDead()) {
+                continue;
+            }
+            // The combat gate is why this lives natively: IsInCombat covers active
+            // combat; the kSearchingInCombat bool bit covers the "searching for an
+            // enemy" (suspicious) sub-state, which IsInCombat alone can miss.
+            if (actor->IsInCombat() ||
+                actor->GetActorRuntimeData().boolBits.all(RE::Actor::BOOL_BITS::kSearchingInCombat)) {
+                continue;
+            }
+            state->Actors().SetStatus(id, a_newStatus);
+            return actor;
+        }
+        return nullptr;
     }
 
     // --- actor queues -----------------------------------------------------------
@@ -305,18 +368,23 @@ namespace {
         return state->Queues().Enqueue(a_queue, a_actor->GetFormID());
     }
 
-    RE::Actor* DequeueActor(RE::StaticFunctionTag*, std::string_view a_queue) {
-        auto* state = GK::GameState::GetSingleton();
-        auto lock = state->Lock();
-        // Entries that no longer resolve to an Actor (deleted / plugin removed
-        // mid-queue) are dropped so the next live actor comes out.
-        while (const auto id = state->Queues().Dequeue(a_queue)) {
+    // Pop the front of a_queue, dropping entries that no longer resolve to an
+    // Actor (deleted / plugin removed mid-queue) so the next live actor comes
+    // out. Caller must hold the GameState lock.
+    RE::Actor* DequeueLiveActor(GK::GameState& a_state, std::string_view a_queue) {
+        while (const auto id = a_state.Queues().Dequeue(a_queue)) {
             auto* form = RE::TESForm::LookupByID(id);
             if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
                 return actor;
             }
         }
         return nullptr;
+    }
+
+    RE::Actor* DequeueActor(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return DequeueLiveActor(*state, a_queue);
     }
 
     std::int32_t GetQueueSize(RE::StaticFunctionTag*, std::string_view a_queue) {
@@ -329,6 +397,60 @@ namespace {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         state->Queues().ClearQueue(a_queue);
+    }
+
+    // Claim from a queue for a SPECIFIC idle actor: if a_actor's status is idle
+    // AND a_queue yields a live actor, transition a_actor to a_newStatus and
+    // return the dequeued actor -- all under the one GameState lock. On ANY
+    // failure (a_actor missing or not idle, queue empty or drained to stale
+    // entries, a_actor untrackable) nothing changes and None is returned.
+    RE::Actor* TransitionIdleActorToAndDequeue(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_queue,
+                                               std::string_view a_newStatus) {
+        if (!a_actor) {
+            return nullptr;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        if (GK::FoldCase(state->Actors().GetStatus(a_actor->GetFormID())) != GK::Status::kIdle) {
+            return nullptr;
+        }
+        auto* dequeued = DequeueLiveActor(*state, a_queue);
+        if (!dequeued) {
+            return nullptr;
+        }
+        if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {  // transitioning is an adder (see SetActorStatus)
+            state->Queues().PushFront(a_queue, dequeued->GetFormID());  // undo the pop: nothing must change
+            return nullptr;
+        }
+        state->Actors().SetStatus(a_actor->GetFormID(), a_newStatus);
+        return dequeued;
+    }
+
+    // --- actor attributes -------------------------------------------------------
+    // Per-actor key/value store (String key -> ObjectReference value): any String
+    // mints an attribute on first set, so plugins define their own without enums
+    // or int mappings (keys are case-insensitive, like Papyrus string compares).
+    // Attributes are an independent utility: they don't track the actor, touch
+    // roles, or take a pool alias, and they persist in the co-save (see
+    // Serialization.cpp, ATTR).
+
+    void SetActorAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key,
+                           RE::TESObjectREFR* a_value) {
+        if (!a_actor || a_key.empty()) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().Set(a_actor->GetFormID(), a_key, a_value ? a_value->GetFormID() : 0);
+    }
+
+    RE::TESObjectREFR* GetActorAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key) {
+        if (!a_actor) {
+            return nullptr;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return AsRef(state->Attributes().Get(a_actor->GetFormID(), a_key));
     }
 
     // --- queries --------------------------------------------------------------
@@ -383,7 +505,7 @@ namespace {
         return state->Actors().HasRoleAnywhere(a_actor->GetFormID(), static_cast<std::uint32_t>(a_roleMask));
     }
 
-    std::vector<RE::Actor*> GetActorsByStatus(RE::StaticFunctionTag*, std::int32_t a_status) {
+    std::vector<RE::Actor*> GetActorsByStatus(RE::StaticFunctionTag*, std::string_view a_status) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         return ResolveActors(state->Actors().GetByStatus(a_status));
@@ -649,11 +771,19 @@ namespace GK::Papyrus {
 
         a_vm->RegisterFunction("SetActorStatus", kClass, SetActorStatus);
         a_vm->RegisterFunction("GetActorStatus", kClass, GetActorStatus);
+        a_vm->RegisterFunction("ClearActorStatus", kClass, ClearActorStatus);
+        a_vm->RegisterFunction("IsActorStatus", kClass, IsActorStatus);
+        a_vm->RegisterFunction("IsActorIdle", kClass, IsActorIdle);
+        a_vm->RegisterFunction("GetIdleActorAndTransitionTo", kClass, GetIdleActorAndTransitionTo);
+        a_vm->RegisterFunction("TransitionIdleActorToAndDequeue", kClass, TransitionIdleActorToAndDequeue);
 
         a_vm->RegisterFunction("EnqueueActor", kClass, EnqueueActor);
         a_vm->RegisterFunction("DequeueActor", kClass, DequeueActor);
         a_vm->RegisterFunction("GetQueueSize", kClass, GetQueueSize);
         a_vm->RegisterFunction("ClearQueue", kClass, ClearQueue);
+
+        a_vm->RegisterFunction("SetActorAttribute", kClass, SetActorAttribute);
+        a_vm->RegisterFunction("GetActorAttribute", kClass, GetActorAttribute);
 
         a_vm->RegisterFunction("GetActorsByRole", kClass, GetActorsByRole);
         a_vm->RegisterFunction("GetActorsByGlobalRole", kClass, GetActorsByGlobalRole);

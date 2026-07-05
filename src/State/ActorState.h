@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 // =============================================================================
@@ -30,11 +32,16 @@ namespace GK {
         inline constexpr std::uint32_t kScopedMask = kWarden | kPrisoner;
     }
 
-    // Status is an opaque, Papyrus-owned vocabulary describing what the actor is
-    // busy with. It is global to the actor (one thing at a time), NOT scoped to a
-    // labyrinth. Native reserves only 0 = Idle; Papyrus defines the rest.
+    // Status is an opaque, Papyrus-owned String vocabulary describing what the
+    // actor is busy with. Native reserves only "idle" (the default for newly
+    // tracked actors); Papyrus defines the rest. An empty String is treated as
+    // "idle" everywhere a status is accepted.
     namespace Status {
-        inline constexpr std::int32_t kIdle = 0;
+        inline constexpr std::string_view kIdle = "idle";
+
+        [[nodiscard]] inline std::string_view Normalize(std::string_view a_status) {
+            return a_status.empty() ? kIdle : a_status;
+        }
     }
 
     struct ActorRecord {
@@ -45,6 +52,10 @@ namespace GK {
         // Prisoner of B. Keys are anchor FormIDs; values are that labyrinth's role
         // mask. An entry is dropped when its mask reaches 0 (see RemoveRole/SetRoles).
         std::unordered_map<RE::FormID, std::uint32_t> rolesByLab;
-        std::int32_t status = Status::kIdle;
+        // See Status above. Global to the actor (one thing at a time), NOT scoped
+        // to a labyrinth. Stored as set (so it reads back with the caller's
+        // casing) but compared case-insensitively, matching Papyrus string
+        // semantics (see ActorRegistry::GetByStatus / FoldCase). Never empty.
+        std::string status{Status::kIdle};
     };
 }
