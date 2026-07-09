@@ -156,6 +156,29 @@ namespace {
         return (state->Actors().GetRoles(a_actor->GetFormID(), a_labyrinth->GetFormID()) & a_flag) != 0;
     }
 
+    // True when a_rec holds any bit of a_mask "for" labyrinth a_labID: global
+    // bits (Wanderer) match regardless of the labyrinth; scoped bits match in
+    // a_labID, or in ANY labyrinth when a_labID is 0 (the None convention, as in
+    // IsWarden/IsPrisoner). Pure record test -- caller holds the GameState lock.
+    bool RecordHasRoleForLab(const GK::ActorRecord& a_rec, RE::FormID a_labID, std::uint32_t a_mask) {
+        if ((a_rec.globalRoles & a_mask) != 0) {
+            return true;
+        }
+        if ((a_mask & GK::Role::kScopedMask) == 0) {
+            return false;
+        }
+        if (a_labID) {
+            const auto it = a_rec.rolesByLab.find(a_labID);
+            return it != a_rec.rolesByLab.end() && (it->second & a_mask) != 0;
+        }
+        for (const auto& [lab, roles] : a_rec.rolesByLab) {
+            if ((roles & a_mask) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool IsWanderer(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) {
             return false;
@@ -328,32 +351,42 @@ namespace {
         return IsActorStatus(a_tag, a_actor, GK::Status::kIdle);
     }
 
+    // Shared claim gate of the atomic idle-claim functions: the tracked record
+    // (a_id, a_rec) is claimable when the status is idle, it isn't the player,
+    // and it resolves to a live actor that is calm -- alive, not in combat, and
+    // not searching for an enemy (suspicious). Returns the actor, or nullptr.
+    // The combat gate is why this lives natively: IsInCombat covers active
+    // combat; the kSearchingInCombat bool bit covers the "searching for an
+    // enemy" (suspicious) sub-state, which IsInCombat alone can miss.
+    RE::Actor* AsClaimableIdle(RE::FormID a_id, const GK::ActorRecord& a_rec) {
+        if (a_id == 0x14 || GK::FoldCase(a_rec.status) != GK::Status::kIdle) {
+            return nullptr;
+        }
+        auto* form = RE::TESForm::LookupByID(a_id);
+        auto* actor = form ? form->As<RE::Actor>() : nullptr;
+        if (!actor || actor->IsDead()) {
+            return nullptr;
+        }
+        if (actor->IsInCombat() ||
+            actor->GetActorRuntimeData().boolBits.all(RE::Actor::BOOL_BITS::kSearchingInCombat)) {
+            return nullptr;
+        }
+        return actor;
+    }
+
     // Atomically claim an idle actor: find a tracked actor whose status is idle
-    // and who is calm -- alive, not in combat, and not searching for an enemy
-    // (suspicious) -- set its status to a_newStatus, and return it. Find + check +
-    // transition all happen under the one GameState lock, so two Papyrus threads
-    // can never claim the same actor. The player is never returned.
+    // and who is calm (see AsClaimableIdle), set its status to a_newStatus, and
+    // return it. Find + check + transition all happen under the one GameState
+    // lock, so two Papyrus threads can never claim the same actor. The player is
+    // never returned.
     RE::Actor* GetIdleActorAndTransitionTo(RE::StaticFunctionTag*, std::string_view a_newStatus) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         for (const auto& [id, rec] : state->Actors().Records()) {
-            if (id == 0x14 || GK::FoldCase(rec.status) != GK::Status::kIdle) {
-                continue;
+            if (auto* actor = AsClaimableIdle(id, rec)) {
+                state->Actors().SetStatus(id, a_newStatus);
+                return actor;
             }
-            auto* form = RE::TESForm::LookupByID(id);
-            auto* actor = form ? form->As<RE::Actor>() : nullptr;
-            if (!actor || actor->IsDead()) {
-                continue;
-            }
-            // The combat gate is why this lives natively: IsInCombat covers active
-            // combat; the kSearchingInCombat bool bit covers the "searching for an
-            // enemy" (suspicious) sub-state, which IsInCombat alone can miss.
-            if (actor->IsInCombat() ||
-                actor->GetActorRuntimeData().boolBits.all(RE::Actor::BOOL_BITS::kSearchingInCombat)) {
-                continue;
-            }
-            state->Actors().SetStatus(id, a_newStatus);
-            return actor;
         }
         return nullptr;
     }
@@ -365,19 +398,26 @@ namespace {
     // track the actor, touch roles, or take a pool alias, and they persist in the
     // co-save (see Serialization.cpp, QUEU).
 
-    bool EnqueueActor(RE::StaticFunctionTag*, std::string_view a_queue, RE::Actor* a_actor) {
+    bool EnqueueActor(RE::StaticFunctionTag*, std::string_view a_queue, RE::Actor* a_actor, float a_delaySeconds) {
         if (!a_actor || a_queue.empty()) {
             return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        const auto now = GK::NowSeconds();
+        state->Queues().PromoteDue(now);
+        if (a_delaySeconds > 0.0f) {
+            return state->Queues().EnqueueAfter(a_queue, a_actor->GetFormID(), a_delaySeconds, now);
+        }
         return state->Queues().Enqueue(a_queue, a_actor->GetFormID());
     }
 
     // Pop the front of a_queue, dropping entries that no longer resolve to an
     // Actor (deleted / plugin removed mid-queue) so the next live actor comes
-    // out. Caller must hold the GameState lock.
+    // out. Promotes due delayed enqueues first, so a ripe delayed actor can be
+    // the one popped. Caller must hold the GameState lock.
     RE::Actor* DequeueLiveActor(GK::GameState& a_state, std::string_view a_queue) {
+        a_state.Queues().PromoteDue(GK::NowSeconds());
         while (const auto id = a_state.Queues().Dequeue(a_queue)) {
             auto* form = RE::TESForm::LookupByID(id);
             if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
@@ -396,6 +436,7 @@ namespace {
     std::int32_t GetQueueSize(RE::StaticFunctionTag*, std::string_view a_queue) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        state->Queues().PromoteDue(GK::NowSeconds());
         return static_cast<std::int32_t>(state->Queues().Size(a_queue));
     }
 
@@ -430,6 +471,54 @@ namespace {
         }
         state->Actors().SetStatus(a_actor->GetFormID(), a_newStatus);
         return dequeued;
+    }
+
+    // Like TransitionIdleActorToAndDequeue, but the idle actor is CHOSEN, not
+    // given: among the claimable idle actors (see AsClaimableIdle) holding
+    // a_role for a_labyrinth (RecordHasRoleForLab: Wanderer matches regardless
+    // of the labyrinth; None = any labyrinth), pick the one closest in 3D to
+    // the next live actor of a_queue, transition it to a_newStatus, pop that
+    // queue entry, and return [claimed, dequeued]. All of it happens under the
+    // one GameState lock, so two Papyrus threads can never claim the same actor
+    // or queue entry. On ANY failure (queue empty or drained to stale entries,
+    // no matching idle actor) nothing changes and an empty array is returned.
+    // The queued actor never claims itself.
+    std::vector<RE::Actor*> TransitionClosestIdleActorToAndDequeue(RE::StaticFunctionTag*,
+                                                                   RE::TESObjectREFR* a_labyrinth,
+                                                                   std::int32_t a_role, std::string_view a_queue,
+                                                                   std::string_view a_newStatus) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        auto* dequeued = DequeueLiveActor(*state, a_queue);
+        if (!dequeued) {
+            return {};
+        }
+        const auto mask = static_cast<std::uint32_t>(a_role);
+        const auto labID = a_labyrinth ? a_labyrinth->GetFormID() : 0;
+        const auto targetPos = dequeued->GetPosition();
+
+        RE::Actor* best = nullptr;
+        float bestDistSq = 0.0f;
+        for (const auto& [id, rec] : state->Actors().Records()) {
+            if (id == dequeued->GetFormID() || !RecordHasRoleForLab(rec, labID, mask)) {
+                continue;
+            }
+            auto* actor = AsClaimableIdle(id, rec);
+            if (!actor) {
+                continue;
+            }
+            const float distSq = actor->GetPosition().GetSquaredDistance(targetPos);
+            if (!best || distSq < bestDistSq) {
+                best = actor;
+                bestDistSq = distSq;
+            }
+        }
+        if (!best) {
+            state->Queues().PushFront(a_queue, dequeued->GetFormID());  // undo the pop: nothing must change
+            return {};
+        }
+        state->Actors().SetStatus(best->GetFormID(), a_newStatus);
+        return {best, dequeued};
     }
 
     // --- actor attributes -------------------------------------------------------
@@ -573,6 +662,17 @@ namespace {
         logger::info("GKNative: registered labyrinth (anchor {:08X}, wardenFaction {:08X}, prisonerFaction {:08X}).",
                      a_anchor->GetFormID(), a_wardenFaction ? a_wardenFaction->GetFormID() : 0,
                      a_prisonerFaction ? a_prisonerFaction->GetFormID() : 0);
+    }
+
+    std::vector<RE::TESObjectREFR*> GetLabyrinths(RE::StaticFunctionTag*) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        std::vector<RE::FormID> anchors;
+        anchors.reserve(state->Labyrinths().All().size());
+        for (const auto& [anchor, factions] : state->Labyrinths().All()) {
+            anchors.push_back(anchor);
+        }
+        return ResolveRefs(anchors);
     }
 
     std::int32_t ScanAllLabyrinths(RE::StaticFunctionTag*) {
@@ -863,6 +963,7 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("IsActorIdle", kClass, IsActorIdle);
         a_vm->RegisterFunction("GetIdleActorAndTransitionTo", kClass, GetIdleActorAndTransitionTo);
         a_vm->RegisterFunction("TransitionIdleActorToAndDequeue", kClass, TransitionIdleActorToAndDequeue);
+        a_vm->RegisterFunction("TransitionClosestIdleActorToAndDequeue", kClass, TransitionClosestIdleActorToAndDequeue);
 
         a_vm->RegisterFunction("EnqueueActor", kClass, EnqueueActor);
         a_vm->RegisterFunction("DequeueActor", kClass, DequeueActor);
@@ -882,6 +983,7 @@ namespace GK::Papyrus {
 
         a_vm->RegisterFunction("ConfigureKeywords", kClass, ConfigureKeywords);
         a_vm->RegisterFunction("RegisterLabyrinth", kClass, RegisterLabyrinth);
+        a_vm->RegisterFunction("GetLabyrinths", kClass, GetLabyrinths);
         a_vm->RegisterFunction("ScanAllLabyrinths", kClass, ScanAllLabyrinths);
         a_vm->RegisterFunction("IsPersistent", kClass, IsPersistent);
 

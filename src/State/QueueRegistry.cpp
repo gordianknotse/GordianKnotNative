@@ -14,6 +14,36 @@ namespace GK {
         return true;
     }
 
+    bool QueueRegistry::EnqueueAfter(std::string_view a_queue, RE::FormID a_actor, double a_delay, double a_now) {
+        auto key = FoldCase(a_queue);
+        if (const auto it = _queues.find(key);
+            it != _queues.end() && std::ranges::find(it->second, a_actor) != it->second.end()) {
+            return false;
+        }
+        if (std::ranges::any_of(_delayed,
+                                [&](const DelayedEnqueue& d) { return d.actor == a_actor && d.queue == key; })) {
+            return false;
+        }
+        _delayed.push_back({std::move(key), a_actor, a_now + a_delay});
+        return true;
+    }
+
+    void QueueRegistry::PromoteDue(double a_now) {
+        if (_delayed.empty()) {
+            return;
+        }
+        // Due entries join in due order, so two delays into the same queue keep
+        // their scheduled order no matter when the promotion actually runs.
+        std::stable_sort(_delayed.begin(), _delayed.end(),
+                         [](const DelayedEnqueue& a_lhs, const DelayedEnqueue& a_rhs) { return a_lhs.due < a_rhs.due; });
+        std::size_t due = 0;
+        while (due < _delayed.size() && _delayed[due].due <= a_now) {
+            Enqueue(_delayed[due].queue, _delayed[due].actor);  // dedupe inside; a duplicate just evaporates
+            ++due;
+        }
+        _delayed.erase(_delayed.begin(), _delayed.begin() + static_cast<std::ptrdiff_t>(due));
+    }
+
     RE::FormID QueueRegistry::Dequeue(std::string_view a_queue) {
         const auto it = _queues.find(FoldCase(a_queue));
         if (it == _queues.end()) {
@@ -36,7 +66,11 @@ namespace GK {
         return it != _queues.end() ? it->second.size() : 0;
     }
 
-    void QueueRegistry::ClearQueue(std::string_view a_queue) { _queues.erase(FoldCase(a_queue)); }
+    void QueueRegistry::ClearQueue(std::string_view a_queue) {
+        const auto key = FoldCase(a_queue);
+        _queues.erase(key);
+        std::erase_if(_delayed, [&](const DelayedEnqueue& d) { return d.queue == key; });
+    }
 
     void QueueRegistry::Put(std::string_view a_queue, std::deque<RE::FormID> a_entries) {
         if (a_entries.empty()) {

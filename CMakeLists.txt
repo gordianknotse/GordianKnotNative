@@ -66,6 +66,7 @@ set(SOURCES
     src/State/AliasPool.h
     src/State/AttributeRegistry.h
     src/State/CaseFold.h
+    src/State/GameClock.h
     src/State/GameState.h
     src/State/Resource.h
     src/State/Cell.h

@@ -3,6 +3,8 @@
 #include "Serialization/Records.h"
 #include "State/GameState.h"
 
+#include <algorithm>
+
 // =============================================================================
 // Phase 2: actor records ('ACTR') + Revert. Resource/labyrinth/orphan records
 // arrive in Phase 5 (see docs/PLAN-V1.md §9) — add cases to LoadCallback and a
@@ -216,7 +218,20 @@ namespace {
                 a_intfc->WriteRecordData(id);
             }
         }
-        logger::info("Serialization: wrote {} actor queue(s).", queues.size());
+
+        // v2: delayed enqueues. The session clock's absolute values die with the
+        // session, so store REMAINING seconds and rebase on load.
+        const auto now = GK::NowSeconds();
+        const auto& delayed = a_queues.Delayed();
+        a_intfc->WriteRecordData(static_cast<std::uint32_t>(delayed.size()));
+        for (const auto& entry : delayed) {
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(entry.queue.size()));
+            a_intfc->WriteRecordData(entry.queue.data(), static_cast<std::uint32_t>(entry.queue.size()));
+            a_intfc->WriteRecordData(entry.actor);
+            const double remaining = std::max(0.0, entry.due - now);
+            a_intfc->WriteRecordData(remaining);
+        }
+        logger::info("Serialization: wrote {} actor queue(s) + {} delayed enqueue(s).", queues.size(), delayed.size());
     }
 
     void LoadQueues(const SKSE::SerializationInterface* a_intfc, std::uint32_t a_version, QueueRegistry& a_queues) {
@@ -254,7 +269,40 @@ namespace {
             loaded += static_cast<std::uint32_t>(entries.size());
             a_queues.Put(name, std::move(entries));  // Put skips a fully-dropped queue
         }
-        logger::info("Serialization: loaded {} queue(s) with {} entr(ies) ({} dropped).", queueCount, loaded, dropped);
+
+        // v2 appends the delayed enqueues; v1 saves have none.
+        std::uint32_t delayedLoaded = 0;
+        std::uint32_t delayedDropped = 0;
+        if (a_version >= 2) {
+            const auto now = GK::NowSeconds();
+            std::uint32_t delayedCount = 0;
+            a_intfc->ReadRecordData(delayedCount);
+            std::vector<GK::DelayedEnqueue> delayed;
+            delayed.reserve(delayedCount);
+            for (std::uint32_t i = 0; i < delayedCount; ++i) {
+                std::uint32_t nameLen = 0;
+                a_intfc->ReadRecordData(nameLen);
+                std::string name(nameLen, '\0');
+                if (nameLen > 0) {
+                    a_intfc->ReadRecordData(name.data(), nameLen);
+                }
+                RE::FormID oldID = 0;
+                a_intfc->ReadRecordData(oldID);
+                double remaining = 0.0;
+                a_intfc->ReadRecordData(remaining);
+                RE::FormID newID = 0;
+                if (a_intfc->ResolveFormID(oldID, newID)) {
+                    delayed.push_back({std::move(name), newID, now + remaining});
+                } else {
+                    ++delayedDropped;  // actor deleted or its plugin removed
+                }
+            }
+            delayedLoaded = static_cast<std::uint32_t>(delayed.size());
+            a_queues.PutDelayed(std::move(delayed));
+        }
+        logger::info("Serialization: loaded {} queue(s) with {} entr(ies) ({} dropped) + {} delayed enqueue(s) ({} "
+                     "dropped).",
+                     queueCount, loaded, dropped, delayedLoaded, delayedDropped);
     }
 
     // --- callbacks ------------------------------------------------------------

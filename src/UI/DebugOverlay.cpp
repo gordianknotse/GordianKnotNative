@@ -1,6 +1,7 @@
 #include "UI/DebugOverlay.h"
 
 #include "State/AliasPool.h"
+#include "State/GameClock.h"
 #include "State/GameState.h"
 #include "State/Labyrinth.h"
 
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -174,9 +176,66 @@ namespace {
     }
 
 
+    // --- ActorUtil package-override count (async VM poll) ------------------------
+    // PapyrusUtil keeps its package overrides in its own plugin storage; the only
+    // cross-plugin surface is the Papyrus global ActorUtil.CountPackageOverride --
+    // the override LIST is not readable at all. The actor detail panel therefore
+    // polls the COUNT through the VM: a throttled static call whose callback
+    // stashes the result in atomics. The callback runs inside the VM -- never take
+    // the GameState lock there (see VmCall.h).
+    constexpr std::int32_t kPkgCountNone = -1;    // no result yet
+    constexpr std::int32_t kPkgCountFailed = -2;  // dispatch/call failed (PapyrusUtil missing?)
+    std::atomic<RE::FormID> g_pkgCountActor{0};   // actor the cached count belongs to
+    std::atomic<std::int32_t> g_pkgCount{kPkgCountNone};
+    std::atomic<bool> g_pkgCountPending{false};
+
+    class PkgCountReceiver : public RE::BSScript::IStackCallbackFunctor {
+    public:
+        explicit PkgCountReceiver(RE::FormID a_actor) : _actor(a_actor) {}
+
+        void operator()(RE::BSScript::Variable a_result) override {
+            if (g_pkgCountActor.load() == _actor) {  // drop results for a stale selection
+                g_pkgCount.store(a_result.IsInt() ? a_result.GetSInt() : kPkgCountFailed);
+            }
+            g_pkgCountPending.store(false);
+        }
+
+        void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+
+    private:
+        RE::FormID _actor;
+    };
+
+    // Refresh the cached count for a_actor (at most one call in flight, at most
+    // one per second). Called every frame the detail panel shows a live actor.
+    void PollPackageOverrideCount(RE::Actor& a_actor) {
+        const auto id = a_actor.GetFormID();
+        static std::chrono::steady_clock::time_point lastPoll{};
+        if (g_pkgCountActor.exchange(id) != id) {
+            g_pkgCount.store(kPkgCountNone);  // new selection: forget the old actor's count
+            lastPoll = {};
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (g_pkgCountPending.load() || now - lastPoll < std::chrono::seconds(1)) {
+            return;
+        }
+        lastPoll = now;
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!vm) {
+            return;
+        }
+        const std::unique_ptr<RE::BSScript::IFunctionArguments> args{RE::MakeFunctionArguments(&a_actor)};
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback{new PkgCountReceiver(id)};
+        g_pkgCountPending.store(true);
+        if (!vm->DispatchStaticCall("ActorUtil", "CountPackageOverride", args.get(), callback)) {
+            g_pkgCountPending.store(false);
+            g_pkgCount.store(kPkgCountFailed);
+        }
+    }
+
     // --- panels ---------------------------------------------------------------------
 
-    void DrawActorDetail(RE::FormID a_id, const GK::ActorRecord& a_rec) {
+    void DrawActorDetail(GK::GameState& a_state, RE::FormID a_id, const GK::ActorRecord& a_rec) {
         auto* form = RE::TESForm::LookupByID(a_id);
         auto* actor = form ? form->As<RE::Actor>() : nullptr;
 
@@ -217,6 +276,16 @@ namespace {
                 pkg ? fmt::format("{:08X} {}", pkg->GetFormID(), pkg->GetFormEditorID() ? pkg->GetFormEditorID() : "")
                     : std::string("(none)");
             ImGui::Text("current package: %s    in combat: %s", pkgLabel.c_str(), actor->IsInCombat() ? "yes" : "no");
+
+            PollPackageOverrideCount(*actor);
+            const auto pkgCount = g_pkgCount.load();
+            if (pkgCount >= 0) {
+                ImGui::Text("ActorUtil package overrides: %d", pkgCount);
+            } else if (pkgCount == kPkgCountFailed) {
+                ImGui::TextDisabled("ActorUtil package overrides: n/a (call failed -- PapyrusUtil missing?)");
+            } else {
+                ImGui::TextDisabled("ActorUtil package overrides: ...");
+            }
         }
 
         ImGui::SeparatorText("Raw record");
@@ -227,6 +296,20 @@ namespace {
         }
         if (a_rec.rolesByLab.empty()) {
             ImGui::TextUnformatted("  (no labyrinth associations)");
+        }
+
+        // Delayed enqueues targeting this actor (usually at most one).
+        const auto now = GK::NowSeconds();
+        for (const auto& entry : a_state.Queues().Delayed()) {
+            if (entry.actor != a_id) {
+                continue;
+            }
+            const double left = entry.due - now;
+            if (left > 0.0) {
+                ImGui::Text("delayed enqueue -> \"%s\" in %.1f s", entry.queue.c_str(), left);
+            } else {
+                ImGui::Text("delayed enqueue -> \"%s\" (due)", entry.queue.c_str());
+            }
         }
     }
 
@@ -323,7 +406,7 @@ namespace {
         if (selected != 0) {
             const auto it = records.find(selected);
             if (it != records.end()) {
-                DrawActorDetail(selected, it->second);
+                DrawActorDetail(a_state, selected, it->second);
             } else {
                 selected = 0;
             }
@@ -451,7 +534,8 @@ namespace {
 
     void DrawQueuesTab(GK::GameState& a_state) {
         const auto& queues = a_state.Queues().Queues();
-        if (queues.empty()) {
+        const auto& delayed = a_state.Queues().Delayed();
+        if (queues.empty() && delayed.empty()) {
             ImGui::TextUnformatted("No queues (a queue exists only while actors wait in it).");
             return;
         }
@@ -471,6 +555,20 @@ namespace {
                 ++pos;
             }
             ImGui::TreePop();
+        }
+        if (!delayed.empty()) {
+            // Read-only view: due entries join their queue on the next queue call
+            // from Papyrus (PromoteDue), not from here -- hence "due" once ripe.
+            ImGui::SeparatorText("Delayed enqueues");
+            const auto now = GK::NowSeconds();
+            for (const auto& entry : delayed) {
+                const double left = entry.due - now;
+                if (left > 0.0) {
+                    ImGui::Text("%s -> \"%s\" in %.1f s", RefLabel(entry.actor).c_str(), entry.queue.c_str(), left);
+                } else {
+                    ImGui::Text("%s -> \"%s\" (due)", RefLabel(entry.actor).c_str(), entry.queue.c_str());
+                }
+            }
         }
     }
 
@@ -738,10 +836,12 @@ namespace {
         static inline REL::Relocation<decltype(thunk)> func;
     };
 
-    // Runs every frame at present time; renders the overlay when visible.
+    // Runs every frame at present time; ticks the pause-respecting session clock
+    // and renders the overlay when visible.
     struct PresentHook {
         static void thunk(std::uint32_t a_p1) {
             func(a_p1);
+            GK::GameClock::Tick();  // per-frame, independent of overlay visibility
             if (!g_imguiReady || !g_visible.load(std::memory_order_relaxed)) {
                 return;
             }

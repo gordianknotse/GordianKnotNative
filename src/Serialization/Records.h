@@ -44,6 +44,9 @@ namespace GK::Serialization {
         inline constexpr std::uint32_t kAttribute = 1;
         // v1: queueCount, then per queue: nameLen, name bytes (case-folded, no
         // terminator), entryCount, actor FormIDs front-to-back.
-        inline constexpr std::uint32_t kQueue = 1;
+        // v2: appends the delayed enqueues: delayedCount, then per entry: nameLen,
+        // name bytes (case-folded), actor FormID, remaining seconds (double --
+        // rebased onto the session clock at load). v1 saves load with none.
+        inline constexpr std::uint32_t kQueue = 2;
     }
 }

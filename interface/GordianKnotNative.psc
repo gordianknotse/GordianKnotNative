@@ -206,6 +206,19 @@ Actor Function GetIdleActorAndTransitionTo(String asNewStatus) Global Native
 ; akActor could not be tracked (transitioning is an ADDER, see the header).
 Actor Function TransitionIdleActorToAndDequeue(Actor akActor, String asQueue, String asNewStatus) Global Native
 
+; Like TransitionIdleActorToAndDequeue, but the idle actor is CHOSEN, not given:
+; among the idle, calm actors holding aiRole (a Role* flag) for akLabyrinth --
+; Wanderer, being global, matches no matter what akLabyrinth is; for the scoped
+; roles pass None to mean ANY labyrinth -- picks the one CLOSEST (3D distance)
+; to asQueue's next live actor, transitions it to asNewStatus, pops that queue
+; entry, and returns a 2-element array: [0] = the claimed idle actor, [1] = the
+; dequeued actor. Atomic under one native lock, so two scripts can never claim
+; the same actor or queue entry. Returns an EMPTY array -- and changes NOTHING
+; (the queue keeps its entries) -- when the queue is empty (or holds only stale
+; entries) or no matching idle actor exists. The queued actor never claims
+; itself; the player is never claimed.
+Actor[] Function TransitionClosestIdleActorToAndDequeue(ObjectReference akLabyrinth, Int aiRole, String asQueue, String asNewStatus) Global Native
+
 ; Tracked actors whose SCOPED role mask in akLabyrinth matches ANY bit in aiRoleMask.
 ; Pass akLabyrinth = None to match the role in ANY labyrinth (each actor listed once).
 Actor[] Function GetActorsByRole(ObjectReference akLabyrinth, Int aiRoleMask) Global Native
@@ -244,7 +257,15 @@ Function ForgetActor(Actor akActor) Global Native
 ; Append akActor to the back of asQueue. False if akActor is None, asQueue is
 ; empty (""), or the actor is already waiting in that queue -- an actor sits in
 ; a given queue at most once, but may wait in any number of DIFFERENT queues.
-Bool Function EnqueueActor(String asQueue, Actor akActor) Global Native
+;
+; afDelaySeconds > 0 schedules the enqueue instead: the actor joins the back of
+; the queue once that many seconds of UNPAUSED gameplay have elapsed (menus and
+; the console pause the countdown; it is real-time otherwise, NOT scaled by the
+; game timescale). Also False if the actor is already scheduled for that queue;
+; if it is waiting in the queue by the time the delay expires, the delayed
+; entry just evaporates. Delayed entries persist across save/load (remaining
+; time preserved) and are dropped by ClearQueue.
+Bool Function EnqueueActor(String asQueue, Actor akActor, Float afDelaySeconds = 0.0) Global Native
 
 ; Pop and return the actor at the front of asQueue, or None if it is empty.
 ; Entries that no longer resolve (actor deleted / its plugin removed) are
@@ -305,6 +326,10 @@ Function ConfigureKeywords(Keyword akCellDoor, Keyword akPatrolMarker, Keyword a
 ; shared across labyrinths; pass None to disable faction sync for that role.
 ; Like the keywords, they're live session pointers: re-register after each load.
 Function RegisterLabyrinth(ObjectReference akAnchor, Faction akWardenFaction, Faction akPrisonerFaction) Global Native
+
+; Every registered labyrinth (its anchor reference). Anchors whose FormID no
+; longer resolves are dropped from the result.
+ObjectReference[] Function GetLabyrinths() Global Native
 
 ; One-shot global discovery across ALL registered labyrinths. Sweeps the whole
 ; form table, so it finds resources WITHOUT their cells being loaded -- but only
