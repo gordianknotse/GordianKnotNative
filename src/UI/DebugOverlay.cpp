@@ -9,9 +9,12 @@
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <string>
+#include <utility>
+#include <vector>
 
 // =============================================================================
 // In-game debug overlay: Dear ImGui rendered from a hook on the game's D3D11
@@ -361,9 +364,9 @@ namespace {
                 if (cell.labyrinth != anchor) {
                     continue;
                 }
-                ImGui::Text("#%d door %s   occ %zu/%u   in %s   out %s", handle, RefLabel(cell.door).c_str(),
-                            cell.occupants.size(), cell.maxOccupants, HexID(cell.inMarker).c_str(),
-                            HexID(cell.outMarker).c_str());
+                ImGui::Text("#%d door %s   occ %zu/%u   flags \"%s\"   in %s   out %s", handle,
+                            RefLabel(cell.door).c_str(), cell.occupants.size(), cell.maxOccupants,
+                            cell.flags.c_str(), HexID(cell.inMarker).c_str(), HexID(cell.outMarker).c_str());
             }
             ImGui::SeparatorText("Patrol markers");
             for (const auto& [handle, marker] : reg.MarkerPool().All()) {
@@ -471,6 +474,152 @@ namespace {
         }
     }
 
+    // "<hex> EditorID [Type]" for a package; editor IDs are usually empty at
+    // runtime (the engine drops them) and alias fills run on engine-instanced
+    // copies with dynamic FF-range FormIDs, so both are flagged rather than
+    // relied on.
+    std::string PackageLabel(const RE::TESPackage& a_pkg) {
+        std::string label = HexID(a_pkg.GetFormID());
+        if (const char* edid = a_pkg.GetFormEditorID(); edid && edid[0]) {
+            label += fmt::format(" {}", edid);
+        }
+        if (const char* type = a_pkg.GetObjectTypeName(); type && type[0]) {
+            label += fmt::format(" [{}]", type);
+        }
+        if (a_pkg.GetFormID() >= 0xFF000000) {
+            label += " (instanced)";
+        }
+        return label;
+    }
+
+    void DrawActorPackageDetail(RE::Actor& a_actor) {
+        // FormIDs seen in the base/alias lists, to classify the current package.
+        std::vector<RE::FormID> listed;
+
+        ImGui::SeparatorText("Base package list (ActorBase, PKID)");
+        // Non-const: BSSimpleList's const begin() doesn't compile (constructs its
+        // iterator from a const Node*).
+        auto* npc = a_actor.GetActorBase();
+        bool any = false;
+        if (npc) {
+            for (const auto* pkg : npc->aiPackages.packages) {
+                if (!pkg) {
+                    continue;
+                }
+                any = true;
+                listed.push_back(pkg->GetFormID());
+                ImGui::Text("  %s", PackageLabel(*pkg).c_str());
+            }
+        }
+        if (!any) {
+            ImGui::TextDisabled("  (empty)");
+        }
+
+        ImGui::SeparatorText("Alias-injected packages (override the base list)");
+        const auto* aliasArray = a_actor.extraList.GetByType<RE::ExtraAliasInstanceArray>();
+        if (!aliasArray || aliasArray->aliases.empty()) {
+            ImGui::TextDisabled("  (no alias instances on this reference)");
+        } else {
+            const RE::BSReadLockGuard guard{aliasArray->lock};
+            for (const auto* inst : aliasArray->aliases) {
+                if (!inst) {
+                    continue;
+                }
+                std::string questLabel = "(null quest)";
+                if (inst->quest) {
+                    const char* qid = inst->quest->GetFormEditorID();
+                    questLabel = fmt::format("{:08X} {}", inst->quest->GetFormID(),
+                                             (qid && qid[0]) ? qid : inst->quest->GetName());
+                }
+                std::string aliasLabel = "(null alias)";
+                if (inst->alias) {
+                    aliasLabel = inst->alias->aliasName.empty()
+                                     ? fmt::format("#{}", inst->alias->aliasID)
+                                     : std::string(inst->alias->aliasName.c_str());
+                }
+                ImGui::Text("%s / %s", questLabel.c_str(), aliasLabel.c_str());
+                if (!inst->instancedPackages || inst->instancedPackages->empty()) {
+                    ImGui::TextDisabled("    (no packages)");
+                    continue;
+                }
+                for (const auto* pkg : *inst->instancedPackages) {
+                    if (!pkg) {
+                        continue;
+                    }
+                    listed.push_back(pkg->GetFormID());
+                    ImGui::Text("    %s", PackageLabel(*pkg).c_str());
+                }
+            }
+        }
+
+        ImGui::SeparatorText("Current (running) package");
+        const auto* current = a_actor.GetCurrentPackage();
+        if (!current) {
+            ImGui::TextDisabled("  (none)");
+        } else {
+            ImGui::Text("  %s", PackageLabel(*current).c_str());
+            const bool fromLists =
+                std::find(listed.begin(), listed.end(), current->GetFormID()) != listed.end();
+            if (!fromLists) {
+                // Not in either enumerable source: scene/combat package, or an
+                // eval-hook override (e.g. PapyrusUtil AddPackageOverride).
+                ImGui::TextDisabled("  (not in base/alias lists: scene, combat, or an override "
+                                    "such as ActorUtil.AddPackageOverride)");
+            }
+        }
+    }
+
+    void DrawPackagesTab(GK::GameState& a_state) {
+        static RE::FormID selected = 0;
+
+        // Candidates: the player, then every actor held by a pool alias.
+        std::vector<std::pair<RE::FormID, std::string>> candidates;
+        if (const auto* player = RE::PlayerCharacter::GetSingleton()) {
+            candidates.emplace_back(player->GetFormID(),
+                                    fmt::format("{} (player)", RefLabel(player->GetFormID())));
+        }
+        if (auto* quest = a_state.AliasQuest()) {
+            const RE::BSReadLockGuard guard{quest->aliasAccessLock};
+            for (const auto* base : quest->aliases) {
+                if (!base || !GK::AliasPool::IsPoolAlias(*base)) {
+                    continue;
+                }
+                const auto* refAlias = skyrim_cast<const RE::BGSRefAlias*>(base);
+                const auto* holder = refAlias ? refAlias->GetActorReference() : nullptr;
+                if (!holder) {
+                    continue;
+                }
+                candidates.emplace_back(holder->GetFormID(), fmt::format("{}  [{}]", RefLabel(holder->GetFormID()),
+                                                                         base->aliasName.c_str()));
+            }
+        }
+
+        if (ImGui::BeginChild("##pkg_actors", ImVec2(280.0f, 0.0f), ImGuiChildFlags_Borders)) {
+            for (const auto& [id, label] : candidates) {
+                if (ImGui::Selectable(label.c_str(), selected == id)) {
+                    selected = (selected == id) ? 0 : id;
+                }
+            }
+            if (candidates.empty()) {
+                ImGui::TextDisabled("(no player / pool holders)");
+            }
+        }
+        ImGui::EndChild();
+        ImGui::SameLine();
+
+        if (ImGui::BeginChild("##pkg_detail", ImVec2(0.0f, 0.0f))) {
+            auto* form = selected ? RE::TESForm::LookupByID(selected) : nullptr;
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            if (actor) {
+                DrawActorPackageDetail(*actor);
+            } else {
+                ImGui::TextDisabled(selected ? "(FormID no longer resolves to an actor)"
+                                             : "(select an actor on the left)");
+            }
+        }
+        ImGui::EndChild();
+    }
+
     void DrawSessionTab(GK::GameState& a_state) {
         ImGui::SeparatorText("Config");
         const auto& kw = a_state.Keywords();
@@ -532,6 +681,10 @@ namespace {
             }
             if (ImGui::BeginTabItem("Queues")) {
                 DrawQueuesTab(*state);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Packages")) {
+                DrawPackagesTab(*state);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Session")) {

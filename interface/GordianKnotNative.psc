@@ -121,9 +121,11 @@ Function ClearPrisoner(Actor akActor, ObjectReference akLabyrinth) Global Native
 
 ; Imprison akActor in the labyrinth akWarden keeps: resolves the labyrinth from
 ; akWarden's Warden role, then acts exactly like SetPrisoner(akActor, it) --
-; same tracking gate and faction sync. False if akWarden wardens no labyrinth or
-; akActor can't be tracked. If akWarden somehow wardens several labyrinths, the
-; first is used (a warning is logged).
+; same tracking gate and faction sync. False WITHOUT effect if akActor is
+; already a prisoner ANYWHERE (two wardens racing for the same actor: exactly
+; one Capture wins), if akWarden wardens no labyrinth, or if akActor can't be
+; tracked. If akWarden somehow wardens several labyrinths, the first is used (a
+; warning is logged).
 ; NOTE: returns BEFORE the prisoner-faction change lands (it goes through the
 ; VM). Put combat-stopping / pose logic in the driver script's OnGKRoleApplied
 ; (see the header), which fires once the faction is really applied.
@@ -340,9 +342,16 @@ Int Function CountFreeAliases(Quest akQuest) Global Native
 ; =============================================================================
 ; Cells  (aiCell is a cell handle; akLabyrinth is the anchor reference)
 ; =============================================================================
+; Cell FLAGS: a String where each CHARACTER is one flag (a cell may carry many).
+; Configured in the CK on the door's GordianKnotCellDoor script (String property
+; `flags`, refreshed on every scan) or at runtime via SetCellFlags. Wherever a
+; function takes asAnyOfFlags, a cell passes the filter when it has AT LEAST ONE
+; of the filter's characters; an empty filter matches every cell. Comparison is
+; case-insensitive.
 
-; All cell handles belonging to a labyrinth (its anchor reference).
-Int[] Function GetCells(ObjectReference akLabyrinth) Global Native
+; All cell handles belonging to a labyrinth (its anchor reference), optionally
+; filtered by flags (see the header).
+Int[] Function GetCells(ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
 
 ObjectReference Function GetCellDoor(Int aiCell) Global Native
 ObjectReference Function GetCellInMarker(Int aiCell) Global Native
@@ -351,8 +360,25 @@ ObjectReference Function GetCellOutMarker(Int aiCell) Global Native
 Int Function GetCellMaxOccupants(Int aiCell) Global Native
 Function SetCellMaxOccupants(Int aiCell, Int aiMax) Global Native
 
+String Function GetCellFlags(Int aiCell) Global Native
+Function SetCellFlags(Int aiCell, String asFlags) Global Native
+
 ; The labyrinth (anchor reference) a cell belongs to (None if handle unknown).
 ObjectReference Function GetCellLabyrinth(Int aiCell) Global Native
+
+; Assign akActor to a free cell (one with occupants < maxOccupants) of
+; akLabyrinth ONLY, passing the flag filter; returns the claimed cell's handle.
+; akLabyrinth must not be None (else 0, no cell assigned). If the actor already
+; occupies a cell -- in any labyrinth -- it is MOVED to the matching one (its
+; current cell is never re-picked); when no cell of akLabyrinth matches it stays
+; put, and its current cell's handle is returned only if that cell is in
+; akLabyrinth (otherwise 0). Returns 0 when no cell was assigned in akLabyrinth,
+; or when a new actor cannot be tracked (adder -- see the alias-pool header);
+; on 0 nothing has changed.
+Int Function AssignPrisonerToCell(Actor akActor, ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
+
+; The handle of the cell akActor is assigned to, or 0 if unassigned.
+Int Function GetActorCell(Actor akActor) Global Native
 
 ; =============================================================================
 ; Patrol markers  (aiMarker is a marker handle)

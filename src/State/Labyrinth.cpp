@@ -21,39 +21,50 @@
 namespace GK {
     namespace {
         // Contract with the Papyrus mod: a cell door may carry a script of this class
-        // exposing an Int property of this name to set the cell's capacity from the CK
-        // (no runtime call needed). Absent script / wrong class / missing or non-int
-        // property all fall back to the default capacity.
+        // exposing an Int `maxOccupants` (cell capacity) and a String `flags` (one
+        // flag per character) to configure the cell from the CK (no runtime call
+        // needed). Absent script / wrong class / missing or wrong-typed properties
+        // all fall back to the defaults.
         constexpr const char* kDoorScriptClass = "GordianKnotCellDoor";
         constexpr const char* kMaxOccupantsProperty = "maxOccupants";
+        constexpr const char* kFlagsProperty = "flags";
 
-        std::uint32_t ReadDoorMaxOccupants(RE::TESObjectREFR& a_door, std::uint32_t a_default) {
+        struct DoorConfig {
+            std::uint32_t maxOccupants = kDefaultCellMaxOccupants;
+            std::string flags;
+        };
+
+        DoorConfig ReadDoorConfig(RE::TESObjectREFR& a_door) {
+            DoorConfig config;
             auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
             if (!vm) {
-                return a_default;
+                return config;
             }
             auto* policy = vm->GetObjectHandlePolicy();
             if (!policy) {
-                return a_default;
+                return config;
             }
 
             const auto handle = policy->GetHandleForObject(a_door.GetFormType(), &a_door);
             if (handle == policy->EmptyHandle()) {
-                return a_default;  // no VM handle for this ref
+                return config;  // no VM handle for this ref
             }
 
             RE::BSTSmartPointer<RE::BSScript::Object> object;
             if (!vm->FindBoundObject(handle, kDoorScriptClass, object) || !object) {
-                return a_default;  // door has no GordianKnotCellDoor script attached
+                return config;  // door has no GordianKnotCellDoor script attached
             }
 
-            const auto* var = object->GetProperty(kMaxOccupantsProperty);
-            if (!var || !var->IsInt()) {
-                return a_default;  // property missing or not an Int
+            if (const auto* var = object->GetProperty(kMaxOccupantsProperty); var && var->IsInt()) {
+                const auto value = var->GetSInt();
+                if (value > 0) {
+                    config.maxOccupants = static_cast<std::uint32_t>(value);
+                }
             }
-
-            const auto value = var->GetSInt();
-            return value > 0 ? static_cast<std::uint32_t>(value) : a_default;
+            if (const auto* var = object->GetProperty(kFlagsProperty); var && var->IsString()) {
+                config.flags = var->GetString();
+            }
+            return config;
         }
 
         void UpsertCell(ResourceRegistry& a_reg, RE::TESObjectREFR& a_door, RE::FormID a_labyrinth,
@@ -69,21 +80,24 @@ namespace GK {
                 outID = m->GetFormID();
             }
 
-            // Capacity is CK config (read off the door's script), so refresh it on
-            // every discovery; occupants/handle are runtime state and are preserved.
-            const std::uint32_t maxOcc = ReadDoorMaxOccupants(a_door, kDefaultCellMaxOccupants);
+            // Capacity + flags are CK config (read off the door's script), so refresh
+            // them on every discovery; occupants/handle are runtime state and are
+            // preserved.
+            auto config = ReadDoorConfig(a_door);
 
             if (auto* existing = a_reg.CellPool().FindByKey(doorID)) {
-                // Refresh topology + capacity; preserve handle and occupants.
+                // Refresh topology + config; preserve handle and occupants.
                 existing->labyrinth = a_labyrinth;
-                existing->maxOccupants = maxOcc;
+                existing->maxOccupants = config.maxOccupants;
+                existing->flags = std::move(config.flags);
                 existing->inMarker = inID;
                 existing->outMarker = outID;
             } else {
                 Cell cell;
                 cell.handle = a_reg.NextHandle();
                 cell.labyrinth = a_labyrinth;
-                cell.maxOccupants = maxOcc;
+                cell.maxOccupants = config.maxOccupants;
+                cell.flags = std::move(config.flags);
                 cell.door = doorID;
                 cell.inMarker = inID;
                 cell.outMarker = outID;

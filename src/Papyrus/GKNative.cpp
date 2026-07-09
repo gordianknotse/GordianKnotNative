@@ -244,14 +244,20 @@ namespace {
 
     // Capture: imprison a_actor in the labyrinth a_warden keeps -- resolves the
     // labyrinth from a_warden's Warden role, then behaves exactly like SetPrisoner
-    // on it (pool gate + faction sync). One atomic native call, so the lookup and
-    // the mutation can't interleave with another thread.
+    // on it (pool gate + faction sync). Fails without effect if a_actor is already
+    // a prisoner ANYWHERE (a prisoner belongs to one labyrinth; two wardens racing
+    // for the same actor -> exactly one wins). One atomic native call, so the
+    // lookups and the mutation can't interleave with another thread.
     bool Capture(RE::StaticFunctionTag*, RE::Actor* a_warden, RE::Actor* a_actor) {
         if (!a_warden || !a_actor) {
             return false;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (state->Actors().HasRoleAnywhere(a_actor->GetFormID(), GK::Role::kPrisoner)) {
+            logger::info("GKNative: Capture rejected (actor {:08X} is already a prisoner).", a_actor->GetFormID());
+            return false;
+        }
         const auto labs = state->Actors().GetLabyrinthsByRole(a_warden->GetFormID(), GK::Role::kWarden);
         if (labs.empty()) {
             logger::warn("GKNative: Capture failed (actor {:08X} is warden of no labyrinth).", a_warden->GetFormID());
@@ -655,6 +661,21 @@ namespace {
         }
     }
 
+    std::string GetCellFlags(RE::StaticFunctionTag*, std::int32_t a_cell) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* cell = state->Resources().CellPool().FindByHandle(a_cell);
+        return cell ? cell->flags : std::string{};
+    }
+
+    void SetCellFlags(RE::StaticFunctionTag*, std::int32_t a_cell, std::string_view a_flags) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        if (auto* cell = state->Resources().CellPool().FindByHandle(a_cell)) {
+            cell->flags = a_flags;
+        }
+    }
+
     RE::TESObjectREFR* GetCellLabyrinth(RE::StaticFunctionTag*, std::int32_t a_cell) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
@@ -662,13 +683,79 @@ namespace {
         return cell ? AsRef(cell->labyrinth) : nullptr;
     }
 
-    std::vector<std::int32_t> GetCells(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth) {
+    std::vector<std::int32_t> GetCells(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
+                                       std::string_view a_anyOfFlags) {
         if (!a_labyrinth) {
             return {};
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return state->Resources().CellPool().HandlesInLabyrinth(a_labyrinth->GetFormID());
+        std::vector<std::int32_t> out;
+        for (const auto& [handle, cell] : state->Resources().CellPool().All()) {
+            if (cell.labyrinth == a_labyrinth->GetFormID() && cell.HasAnyFlagOf(a_anyOfFlags)) {
+                out.push_back(handle);
+            }
+        }
+        return out;
+    }
+
+    // Claim a free cell for an actor; returns the claimed cell's handle (0 = none).
+    // Candidates are the cells of a_labyrinth ONLY (null labyrinth -> 0, no
+    // effect) that have space and pass the flag filter. If the actor already
+    // occupies a cell -- in ANY labyrinth -- it is MOVED to the matching one (its
+    // current cell is not a candidate); with no match it stays put, and the
+    // current cell's handle is returned only when that cell belongs to
+    // a_labyrinth (otherwise 0: nothing was assigned there). Assigning a NEW
+    // actor is an adder (see SetActorStatus): if the actor can't be tracked,
+    // nothing changes and 0 is returned.
+    std::int32_t AssignPrisonerToCell(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
+                                      std::string_view a_anyOfFlags) {
+        if (!a_actor || !a_labyrinth) {
+            return GK::kInvalidHandle;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto actorID = a_actor->GetFormID();
+        const auto labID = a_labyrinth->GetFormID();
+
+        GK::Handle currentHandle = GK::kInvalidHandle;
+        GK::Cell* current = nullptr;
+        GK::Handle targetHandle = GK::kInvalidHandle;
+        GK::Cell* target = nullptr;
+        for (auto& [handle, cell] : state->Resources().CellPool().All()) {
+            if (cell.Contains(actorID)) {
+                currentHandle = handle;
+                current = &cell;
+            } else if (!target && cell.labyrinth == labID && cell.HasSpace() && cell.HasAnyFlagOf(a_anyOfFlags)) {
+                targetHandle = handle;
+                target = &cell;
+            }
+        }
+        if (!target) {
+            return (current && current->labyrinth == labID) ? currentHandle : GK::kInvalidHandle;
+        }
+        if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
+            return GK::kInvalidHandle;
+        }
+        if (current) {
+            std::erase(current->occupants, actorID);
+        }
+        target->occupants.push_back(actorID);
+        return targetHandle;
+    }
+
+    std::int32_t GetActorCell(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return GK::kInvalidHandle;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        for (const auto& [handle, cell] : state->Resources().CellPool().All()) {
+            if (cell.Contains(a_actor->GetFormID())) {
+                return handle;
+            }
+        }
+        return GK::kInvalidHandle;
     }
 
     // --- markers --------------------------------------------------------------
@@ -807,8 +894,12 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("GetCellOutMarker", kClass, GetCellOutMarker);
         a_vm->RegisterFunction("GetCellMaxOccupants", kClass, GetCellMaxOccupants);
         a_vm->RegisterFunction("SetCellMaxOccupants", kClass, SetCellMaxOccupants);
+        a_vm->RegisterFunction("GetCellFlags", kClass, GetCellFlags);
+        a_vm->RegisterFunction("SetCellFlags", kClass, SetCellFlags);
         a_vm->RegisterFunction("GetCellLabyrinth", kClass, GetCellLabyrinth);
         a_vm->RegisterFunction("GetCells", kClass, GetCells);
+        a_vm->RegisterFunction("AssignPrisonerToCell", kClass, AssignPrisonerToCell);
+        a_vm->RegisterFunction("GetActorCell", kClass, GetActorCell);
 
         a_vm->RegisterFunction("GetMarkerRef", kClass, GetMarkerRef);
         a_vm->RegisterFunction("GetMarkerMaxOccupants", kClass, GetMarkerMaxOccupants);
