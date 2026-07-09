@@ -1,7 +1,11 @@
 #pragma once
 
+#include "State/CaseFold.h"
+
 #include <algorithm>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -32,12 +36,25 @@ namespace GK {
         Handle handle = kInvalidHandle;
         RE::FormID labyrinth = 0;           // labyrinth anchor REFR FormID
         std::uint32_t maxOccupants = 1;
+        std::string flags;                  // one flag per character; "" = no flags
         std::vector<RE::FormID> occupants;  // actor FormIDs (filled in Phase 4)
 
         [[nodiscard]] bool HasSpace() const { return occupants.size() < maxOccupants; }
 
         [[nodiscard]] bool Contains(RE::FormID a_actor) const {
             return std::find(occupants.begin(), occupants.end(), a_actor) != occupants.end();
+        }
+
+        // Flag filter used by the getters/assigners: true when the resource has
+        // at least ONE of a_anyOfFlags' characters, or when the filter is empty
+        // (no filter). Case-insensitive, like every Papyrus string vocabulary.
+        [[nodiscard]] bool HasAnyFlagOf(std::string_view a_anyOfFlags) const {
+            if (a_anyOfFlags.empty()) {
+                return true;
+            }
+            const auto have = FoldCase(flags);
+            const auto want = FoldCase(a_anyOfFlags);
+            return have.find_first_of(want) != std::string::npos;
         }
     };
 

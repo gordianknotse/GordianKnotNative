@@ -464,8 +464,8 @@ namespace {
                 if (furn.labyrinth != anchor) {
                     continue;
                 }
-                ImGui::Text("#%d %s   occ %zu/%u", handle, RefLabel(furn.ref).c_str(), furn.occupants.size(),
-                            furn.maxOccupants);
+                ImGui::Text("#%d %s   occ %zu/%u   flags \"%s\"", handle, RefLabel(furn.ref).c_str(),
+                            furn.occupants.size(), furn.maxOccupants, furn.flags.c_str());
             }
             ImGui::SeparatorText("Wardens");
             for (const auto wardenID : a_state.Actors().GetByRole(anchor, GK::Role::kWarden)) {

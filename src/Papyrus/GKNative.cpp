@@ -6,6 +6,8 @@
 #include "State/Labyrinth.h"
 #include "State/RoleFactions.h"
 
+#include <random>
+
 // =============================================================================
 // Phase 1: actor tracking (roles + status). Resource / labyrinth / orphan
 // functions arrive in later phases (see docs/PLAN-V1.md §9).
@@ -799,15 +801,23 @@ namespace {
         return out;
     }
 
+    // Uniform random pick for the assigners below. Seeded once per session;
+    // callers hold the GameState lock, which also serializes the engine.
+    std::size_t RandomIndex(std::size_t a_count) {
+        static std::mt19937 rng{std::random_device{}()};
+        return std::uniform_int_distribution<std::size_t>{0, a_count - 1}(rng);
+    }
+
     // Claim a free cell for an actor; returns the claimed cell's handle (0 = none).
     // Candidates are the cells of a_labyrinth ONLY (null labyrinth -> 0, no
-    // effect) that have space and pass the flag filter. If the actor already
-    // occupies a cell -- in ANY labyrinth -- it is MOVED to the matching one (its
-    // current cell is not a candidate); with no match it stays put, and the
-    // current cell's handle is returned only when that cell belongs to
-    // a_labyrinth (otherwise 0: nothing was assigned there). Assigning a NEW
-    // actor is an adder (see SetActorStatus): if the actor can't be tracked,
-    // nothing changes and 0 is returned.
+    // effect) that have space and pass the flag filter; one is picked at RANDOM
+    // (uniform among the candidates). If the actor already occupies a cell -- in
+    // ANY labyrinth -- it is MOVED to the picked one (its current cell is not a
+    // candidate); with no candidate it stays put, and the current cell's handle
+    // is returned only when that cell belongs to a_labyrinth (otherwise 0:
+    // nothing was assigned there). Assigning a NEW actor is an adder (see
+    // SetActorStatus): if the actor can't be tracked, nothing changes and 0 is
+    // returned.
     std::int32_t AssignPrisonerToCell(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
                                       std::string_view a_anyOfFlags) {
         if (!a_actor || !a_labyrinth) {
@@ -820,23 +830,22 @@ namespace {
 
         GK::Handle currentHandle = GK::kInvalidHandle;
         GK::Cell* current = nullptr;
-        GK::Handle targetHandle = GK::kInvalidHandle;
-        GK::Cell* target = nullptr;
+        std::vector<std::pair<GK::Handle, GK::Cell*>> candidates;
         for (auto& [handle, cell] : state->Resources().CellPool().All()) {
             if (cell.Contains(actorID)) {
                 currentHandle = handle;
                 current = &cell;
-            } else if (!target && cell.labyrinth == labID && cell.HasSpace() && cell.HasAnyFlagOf(a_anyOfFlags)) {
-                targetHandle = handle;
-                target = &cell;
+            } else if (cell.labyrinth == labID && cell.HasSpace() && cell.HasAnyFlagOf(a_anyOfFlags)) {
+                candidates.emplace_back(handle, &cell);
             }
         }
-        if (!target) {
+        if (candidates.empty()) {
             return (current && current->labyrinth == labID) ? currentHandle : GK::kInvalidHandle;
         }
         if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
             return GK::kInvalidHandle;
         }
+        const auto [targetHandle, target] = candidates[RandomIndex(candidates.size())];
         if (current) {
             std::erase(current->occupants, actorID);
         }
@@ -856,6 +865,19 @@ namespace {
             }
         }
         return GK::kInvalidHandle;
+    }
+
+    // Remove a_actor from every cell holding it (normally at most one). Clearing
+    // mutator: never tracks; unassigned actor is a no-op.
+    void ClearActorCell(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        for (auto& [handle, cell] : state->Resources().CellPool().All()) {
+            std::erase(cell.occupants, a_actor->GetFormID());
+        }
     }
 
     // --- markers --------------------------------------------------------------
@@ -917,13 +939,108 @@ namespace {
         return furniture ? AsRef(furniture->labyrinth) : nullptr;
     }
 
-    std::vector<std::int32_t> GetFurnitures(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth) {
+    std::string GetFurnitureFlags(RE::StaticFunctionTag*, std::int32_t a_furniture) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* furniture = state->Resources().FurniturePool().FindByHandle(a_furniture);
+        return furniture ? furniture->flags : std::string{};
+    }
+
+    void SetFurnitureFlags(RE::StaticFunctionTag*, std::int32_t a_furniture, std::string_view a_flags) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        if (auto* furniture = state->Resources().FurniturePool().FindByHandle(a_furniture)) {
+            furniture->flags = a_flags;
+        }
+    }
+
+    std::vector<std::int32_t> GetFurnitures(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
+                                            std::string_view a_anyOfFlags) {
         if (!a_labyrinth) {
             return {};
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        return state->Resources().FurniturePool().HandlesInLabyrinth(a_labyrinth->GetFormID());
+        std::vector<std::int32_t> out;
+        for (const auto& [handle, furniture] : state->Resources().FurniturePool().All()) {
+            if (furniture.labyrinth == a_labyrinth->GetFormID() && furniture.HasAnyFlagOf(a_anyOfFlags)) {
+                out.push_back(handle);
+            }
+        }
+        return out;
+    }
+
+    // Claim a free furniture for an actor; returns the claimed furniture's handle
+    // (0 = none). Same contract as AssignPrisonerToCell (furniture is
+    // single-occupant): candidates are the furniture of a_labyrinth ONLY (null
+    // labyrinth -> 0, no effect) that have space and pass the flag filter; one is
+    // picked at RANDOM (uniform among the candidates). If the actor already
+    // occupies a furniture -- in ANY labyrinth -- it is MOVED to the picked one
+    // (its current furniture is not a candidate); with no candidate it stays put,
+    // and the current handle is returned only when that furniture belongs to
+    // a_labyrinth (otherwise 0: nothing was assigned there). Assigning a NEW
+    // actor is an adder (see SetActorStatus): if the actor can't be tracked,
+    // nothing changes and 0 is returned.
+    std::int32_t AssignPrisonerToFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
+                                           std::string_view a_anyOfFlags) {
+        if (!a_actor || !a_labyrinth) {
+            return GK::kInvalidHandle;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto actorID = a_actor->GetFormID();
+        const auto labID = a_labyrinth->GetFormID();
+
+        GK::Handle currentHandle = GK::kInvalidHandle;
+        GK::Furniture* current = nullptr;
+        std::vector<std::pair<GK::Handle, GK::Furniture*>> candidates;
+        for (auto& [handle, furniture] : state->Resources().FurniturePool().All()) {
+            if (furniture.Contains(actorID)) {
+                currentHandle = handle;
+                current = &furniture;
+            } else if (furniture.labyrinth == labID && furniture.HasSpace() && furniture.HasAnyFlagOf(a_anyOfFlags)) {
+                candidates.emplace_back(handle, &furniture);
+            }
+        }
+        if (candidates.empty()) {
+            return (current && current->labyrinth == labID) ? currentHandle : GK::kInvalidHandle;
+        }
+        if (!GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
+            return GK::kInvalidHandle;
+        }
+        const auto [targetHandle, target] = candidates[RandomIndex(candidates.size())];
+        if (current) {
+            std::erase(current->occupants, actorID);
+        }
+        target->occupants.push_back(actorID);
+        return targetHandle;
+    }
+
+    std::int32_t GetActorFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return GK::kInvalidHandle;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        for (const auto& [handle, furniture] : state->Resources().FurniturePool().All()) {
+            if (furniture.Contains(a_actor->GetFormID())) {
+                return handle;
+            }
+        }
+        return GK::kInvalidHandle;
+    }
+
+    // Remove a_actor from every furniture holding it (normally at most one).
+    // Clearing mutator: never tracks; unassigned actor is a no-op.
+    void ClearActorFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        for (auto& [handle, furniture] : state->Resources().FurniturePool().All()) {
+            std::erase(furniture.occupants, a_actor->GetFormID());
+        }
     }
 }
 
@@ -1002,6 +1119,7 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("GetCells", kClass, GetCells);
         a_vm->RegisterFunction("AssignPrisonerToCell", kClass, AssignPrisonerToCell);
         a_vm->RegisterFunction("GetActorCell", kClass, GetActorCell);
+        a_vm->RegisterFunction("ClearActorCell", kClass, ClearActorCell);
 
         a_vm->RegisterFunction("GetMarkerRef", kClass, GetMarkerRef);
         a_vm->RegisterFunction("GetMarkerMaxOccupants", kClass, GetMarkerMaxOccupants);
@@ -1011,7 +1129,12 @@ namespace GK::Papyrus {
 
         a_vm->RegisterFunction("GetFurnitureRef", kClass, GetFurnitureRef);
         a_vm->RegisterFunction("GetFurnitureLabyrinth", kClass, GetFurnitureLabyrinth);
+        a_vm->RegisterFunction("GetFurnitureFlags", kClass, GetFurnitureFlags);
+        a_vm->RegisterFunction("SetFurnitureFlags", kClass, SetFurnitureFlags);
         a_vm->RegisterFunction("GetFurnitures", kClass, GetFurnitures);
+        a_vm->RegisterFunction("AssignPrisonerToFurniture", kClass, AssignPrisonerToFurniture);
+        a_vm->RegisterFunction("GetActorFurniture", kClass, GetActorFurniture);
+        a_vm->RegisterFunction("ClearActorFurniture", kClass, ClearActorFurniture);
 
         logger::info("GKNative: registered actor + labyrinth/resource Papyrus functions.");
         return true;

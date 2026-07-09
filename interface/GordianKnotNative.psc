@@ -392,18 +392,22 @@ Function SetCellFlags(Int aiCell, String asFlags) Global Native
 ObjectReference Function GetCellLabyrinth(Int aiCell) Global Native
 
 ; Assign akActor to a free cell (one with occupants < maxOccupants) of
-; akLabyrinth ONLY, passing the flag filter; returns the claimed cell's handle.
-; akLabyrinth must not be None (else 0, no cell assigned). If the actor already
-; occupies a cell -- in any labyrinth -- it is MOVED to the matching one (its
-; current cell is never re-picked); when no cell of akLabyrinth matches it stays
-; put, and its current cell's handle is returned only if that cell is in
-; akLabyrinth (otherwise 0). Returns 0 when no cell was assigned in akLabyrinth,
-; or when a new actor cannot be tracked (adder -- see the alias-pool header);
-; on 0 nothing has changed.
+; akLabyrinth ONLY, passing the flag filter -- picked at RANDOM (uniform among
+; the matching cells); returns the claimed cell's handle. akLabyrinth must not
+; be None (else 0, no cell assigned). If the actor already occupies a cell --
+; in any labyrinth -- it is MOVED to the picked one (its current cell is never
+; re-picked); when no cell of akLabyrinth matches it stays put, and its current
+; cell's handle is returned only if that cell is in akLabyrinth (otherwise 0).
+; Returns 0 when no cell was assigned in akLabyrinth, or when a new actor
+; cannot be tracked (adder -- see the alias-pool header); on 0 nothing has
+; changed.
 Int Function AssignPrisonerToCell(Actor akActor, ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
 
 ; The handle of the cell akActor is assigned to, or 0 if unassigned.
 Int Function GetActorCell(Actor akActor) Global Native
+
+; Remove akActor from whatever cell it is assigned to (no-op if unassigned).
+Function ClearActorCell(Actor akActor) Global Native
 
 ; =============================================================================
 ; Patrol markers  (aiMarker is a marker handle)
@@ -421,9 +425,38 @@ ObjectReference Function GetMarkerLabyrinth(Int aiMarker) Global Native
 ; =============================================================================
 ; Furniture  (aiFurniture is a furniture handle; always single-occupant)
 ; =============================================================================
+; Furniture FLAGS work exactly like cell flags (see the Cells header): one flag
+; per character, matched case-insensitively; asAnyOfFlags passes when the
+; furniture has at least one of its characters, and an empty filter matches
+; everything. Configured in the CK on the furniture reference's
+; GordianKnotFurnitureAttribs script (String property `flags`, refreshed on
+; every scan) or at runtime via SetFurnitureFlags.
 
-Int[] Function GetFurnitures(ObjectReference akLabyrinth) Global Native
+; All furniture handles belonging to a labyrinth, optionally filtered by flags.
+Int[] Function GetFurnitures(ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
 
 ObjectReference Function GetFurnitureRef(Int aiFurniture) Global Native
 
 ObjectReference Function GetFurnitureLabyrinth(Int aiFurniture) Global Native
+
+String Function GetFurnitureFlags(Int aiFurniture) Global Native
+Function SetFurnitureFlags(Int aiFurniture, String asFlags) Global Native
+
+; Assign akActor to a free furniture of akLabyrinth ONLY, passing the flag
+; filter -- picked at RANDOM (uniform among the matching furniture); returns
+; the claimed furniture's handle. Same contract as AssignPrisonerToCell (each
+; furniture holds one actor). akLabyrinth must not be None (else 0, nothing
+; assigned). If the actor already occupies a furniture -- in any labyrinth --
+; it is MOVED to the picked one (its current furniture is never re-picked);
+; when no furniture of akLabyrinth matches it stays put, and its current
+; furniture's handle is returned only if that furniture is in akLabyrinth
+; (otherwise 0). Returns 0 when nothing was assigned in akLabyrinth, or when a
+; new actor cannot be tracked (adder -- see the alias-pool header); on 0
+; nothing has changed.
+Int Function AssignPrisonerToFurniture(Actor akActor, ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
+
+; The handle of the furniture akActor is assigned to, or 0 if unassigned.
+Int Function GetActorFurniture(Actor akActor) Global Native
+
+; Remove akActor from whatever furniture it is assigned to (no-op if unassigned).
+Function ClearActorFurniture(Actor akActor) Global Native

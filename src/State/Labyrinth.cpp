@@ -20,14 +20,48 @@
 
 namespace GK {
     namespace {
-        // Contract with the Papyrus mod: a cell door may carry a script of this class
-        // exposing an Int `maxOccupants` (cell capacity) and a String `flags` (one
-        // flag per character) to configure the cell from the CK (no runtime call
-        // needed). Absent script / wrong class / missing or wrong-typed properties
-        // all fall back to the defaults.
+        // Contract with the Papyrus mod: a resource reference may carry a script of
+        // the matching class to configure it from the CK (no runtime call needed).
+        // A cell door's GordianKnotCellDoor exposes an Int `maxOccupants` (cell
+        // capacity) and a String `flags` (one flag per character); a furniture's
+        // GordianKnotFurnitureAttribs exposes `flags` only (furniture stays
+        // single-occupant). Absent script / wrong class / missing or wrong-typed
+        // properties all fall back to the defaults.
         constexpr const char* kDoorScriptClass = "GordianKnotCellDoor";
+        constexpr const char* kFurnitureScriptClass = "GordianKnotFurnitureAttribs";
         constexpr const char* kMaxOccupantsProperty = "maxOccupants";
         constexpr const char* kFlagsProperty = "flags";
+
+        // The script instance of a_class bound to a_ref (empty if no VM / no
+        // handle / no such script attached).
+        RE::BSTSmartPointer<RE::BSScript::Object> FindBoundScript(RE::TESObjectREFR& a_ref, const char* a_class) {
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            if (!vm) {
+                return {};
+            }
+            auto* policy = vm->GetObjectHandlePolicy();
+            if (!policy) {
+                return {};
+            }
+            const auto handle = policy->GetHandleForObject(a_ref.GetFormType(), &a_ref);
+            if (handle == policy->EmptyHandle()) {
+                return {};  // no VM handle for this ref
+            }
+            RE::BSTSmartPointer<RE::BSScript::Object> object;
+            if (!vm->FindBoundObject(handle, a_class, object)) {
+                return {};  // ref has no script of this class attached
+            }
+            return object;
+        }
+
+        std::string ReadFlagsProperty(const RE::BSTSmartPointer<RE::BSScript::Object>& a_object) {
+            if (a_object) {
+                if (const auto* var = a_object->GetProperty(kFlagsProperty); var && var->IsString()) {
+                    return std::string(var->GetString());
+                }
+            }
+            return {};
+        }
 
         struct DoorConfig {
             std::uint32_t maxOccupants = kDefaultCellMaxOccupants;
@@ -36,34 +70,17 @@ namespace GK {
 
         DoorConfig ReadDoorConfig(RE::TESObjectREFR& a_door) {
             DoorConfig config;
-            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-            if (!vm) {
+            const auto object = FindBoundScript(a_door, kDoorScriptClass);
+            if (!object) {
                 return config;
             }
-            auto* policy = vm->GetObjectHandlePolicy();
-            if (!policy) {
-                return config;
-            }
-
-            const auto handle = policy->GetHandleForObject(a_door.GetFormType(), &a_door);
-            if (handle == policy->EmptyHandle()) {
-                return config;  // no VM handle for this ref
-            }
-
-            RE::BSTSmartPointer<RE::BSScript::Object> object;
-            if (!vm->FindBoundObject(handle, kDoorScriptClass, object) || !object) {
-                return config;  // door has no GordianKnotCellDoor script attached
-            }
-
             if (const auto* var = object->GetProperty(kMaxOccupantsProperty); var && var->IsInt()) {
                 const auto value = var->GetSInt();
                 if (value > 0) {
                     config.maxOccupants = static_cast<std::uint32_t>(value);
                 }
             }
-            if (const auto* var = object->GetProperty(kFlagsProperty); var && var->IsString()) {
-                config.flags = var->GetString();
-            }
+            config.flags = ReadFlagsProperty(object);
             return config;
         }
 
@@ -121,13 +138,18 @@ namespace GK {
 
         void UpsertFurniture(ResourceRegistry& a_reg, RE::TESObjectREFR& a_ref, RE::FormID a_labyrinth) {
             const RE::FormID refID = a_ref.GetFormID();
+            // Flags are CK config (read off the ref's script), so refresh them on
+            // every discovery; occupants/handle are runtime state and are preserved.
+            auto flags = ReadFlagsProperty(FindBoundScript(a_ref, kFurnitureScriptClass));
             if (auto* existing = a_reg.FurniturePool().FindByKey(refID)) {
                 existing->labyrinth = a_labyrinth;
+                existing->flags = std::move(flags);
             } else {
                 Furniture furniture;
                 furniture.handle = a_reg.NextHandle();
                 furniture.labyrinth = a_labyrinth;
                 furniture.maxOccupants = 1;  // furniture is single-occupant
+                furniture.flags = std::move(flags);
                 furniture.ref = refID;
                 a_reg.FurniturePool().Insert(std::move(furniture));
             }
