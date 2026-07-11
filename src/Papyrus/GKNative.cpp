@@ -50,6 +50,18 @@ namespace {
         return out;
     }
 
+    // Shared session RNG for the random picks (assigners, animation registries).
+    // Seeded once; callers hold the GameState lock, which also serializes it.
+    std::mt19937& Rng() {
+        static std::mt19937 rng{std::random_device{}()};
+        return rng;
+    }
+
+    // Uniform random index into a non-empty range.
+    std::size_t RandomIndex(std::size_t a_count) {
+        return std::uniform_int_distribution<std::size_t>{0, a_count - 1}(Rng());
+    }
+
     // --- tracking + roles -----------------------------------------------------
     // Roles come in two kinds (see GK::Role): GLOBAL (Wanderer) live on the actor
     // and take no labyrinth; SCOPED (Warden/Prisoner) are an association with one
@@ -550,6 +562,41 @@ namespace {
         return AsRef(state->Attributes().Get(a_actor->GetFormID(), a_key));
     }
 
+    // --- animation registries ---------------------------------------------------
+    // Named, weighted pools of animation names: any String mints a registry on
+    // first use (names case-insensitive, like Papyrus). SESSION config like the
+    // keyword config -- never serialized, so scripts re-Add on every game load
+    // (Add is idempotent; re-adding just updates the weight).
+
+    bool AddAnimation(RE::StaticFunctionTag*, std::string_view a_registry, std::string_view a_anim, float a_weight) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return state->Animations().Add(a_registry, a_anim, a_weight);
+    }
+
+    // Weighted-random draw: an entry's chance is weight / (sum of the registry's
+    // weights). "" when the registry was never used (or all Adds were rejected).
+    std::string GetAnimation(RE::StaticFunctionTag*, std::string_view a_registry) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* entries = state->Animations().Find(a_registry);
+        if (!entries || entries->empty()) {
+            return {};
+        }
+        double total = 0.0;
+        for (const auto& entry : *entries) {
+            total += entry.weight;
+        }
+        double roll = std::uniform_real_distribution<double>{0.0, total}(Rng());
+        for (const auto& entry : *entries) {
+            roll -= entry.weight;
+            if (roll < 0.0) {
+                return entry.name;
+            }
+        }
+        return entries->back().name;  // floating-point edge: roll landed exactly on total
+    }
+
     // --- queries --------------------------------------------------------------
 
     std::vector<RE::Actor*> GetActorsByRole(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
@@ -690,6 +737,20 @@ namespace {
         return a_ref && (a_ref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kPersistent) != 0;
     }
 
+    // Debug.SendAnimationEvent with the engine's verdict surfaced: the actor's
+    // behavior graph resolves the event name against its event table, so the
+    // return is false when the event does not exist there (animation pack
+    // missing, or its FNIS/Nemesis/Pandora patch was never generated) and true
+    // when the event was accepted (and plays). Requires the actor's 3D/graph to
+    // be loaded -- an unloaded actor reports false for events it does have. No
+    // game state, no lock needed.
+    bool TrySendAnimationEvent(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_event) {
+        if (!a_actor || a_event.empty()) {
+            return false;
+        }
+        return a_actor->NotifyAnimationGraph(RE::BSFixedString{a_event});
+    }
+
     // --- alias pool (Papyrus-facing; the allocation itself is EnsureTrackable) ---
 
     // Supply the quest carrying the GkNpc pool aliases. Session config like
@@ -786,7 +847,7 @@ namespace {
     }
 
     std::vector<std::int32_t> GetCells(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
-                                       std::string_view a_anyOfFlags) {
+                                       std::string_view a_filterString) {
         if (!a_labyrinth) {
             return {};
         }
@@ -794,18 +855,11 @@ namespace {
         auto lock = state->Lock();
         std::vector<std::int32_t> out;
         for (const auto& [handle, cell] : state->Resources().CellPool().All()) {
-            if (cell.labyrinth == a_labyrinth->GetFormID() && cell.HasAnyFlagOf(a_anyOfFlags)) {
+            if (cell.labyrinth == a_labyrinth->GetFormID() && cell.MatchesFilter(a_filterString)) {
                 out.push_back(handle);
             }
         }
         return out;
-    }
-
-    // Uniform random pick for the assigners below. Seeded once per session;
-    // callers hold the GameState lock, which also serializes the engine.
-    std::size_t RandomIndex(std::size_t a_count) {
-        static std::mt19937 rng{std::random_device{}()};
-        return std::uniform_int_distribution<std::size_t>{0, a_count - 1}(rng);
     }
 
     // Claim a free cell for an actor; returns the claimed cell's handle (0 = none).
@@ -819,7 +873,7 @@ namespace {
     // SetActorStatus): if the actor can't be tracked, nothing changes and 0 is
     // returned.
     std::int32_t AssignPrisonerToCell(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
-                                      std::string_view a_anyOfFlags) {
+                                      std::string_view a_filterString) {
         if (!a_actor || !a_labyrinth) {
             return GK::kInvalidHandle;
         }
@@ -835,7 +889,7 @@ namespace {
             if (cell.Contains(actorID)) {
                 currentHandle = handle;
                 current = &cell;
-            } else if (cell.labyrinth == labID && cell.HasSpace() && cell.HasAnyFlagOf(a_anyOfFlags)) {
+            } else if (cell.labyrinth == labID && cell.HasSpace() && cell.MatchesFilter(a_filterString)) {
                 candidates.emplace_back(handle, &cell);
             }
         }
@@ -955,7 +1009,7 @@ namespace {
     }
 
     std::vector<std::int32_t> GetFurnitures(RE::StaticFunctionTag*, RE::TESObjectREFR* a_labyrinth,
-                                            std::string_view a_anyOfFlags) {
+                                            std::string_view a_filterString) {
         if (!a_labyrinth) {
             return {};
         }
@@ -963,7 +1017,7 @@ namespace {
         auto lock = state->Lock();
         std::vector<std::int32_t> out;
         for (const auto& [handle, furniture] : state->Resources().FurniturePool().All()) {
-            if (furniture.labyrinth == a_labyrinth->GetFormID() && furniture.HasAnyFlagOf(a_anyOfFlags)) {
+            if (furniture.labyrinth == a_labyrinth->GetFormID() && furniture.MatchesFilter(a_filterString)) {
                 out.push_back(handle);
             }
         }
@@ -982,7 +1036,7 @@ namespace {
     // actor is an adder (see SetActorStatus): if the actor can't be tracked,
     // nothing changes and 0 is returned.
     std::int32_t AssignPrisonerToFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
-                                           std::string_view a_anyOfFlags) {
+                                           std::string_view a_filterString) {
         if (!a_actor || !a_labyrinth) {
             return GK::kInvalidHandle;
         }
@@ -998,7 +1052,7 @@ namespace {
             if (furniture.Contains(actorID)) {
                 currentHandle = handle;
                 current = &furniture;
-            } else if (furniture.labyrinth == labID && furniture.HasSpace() && furniture.HasAnyFlagOf(a_anyOfFlags)) {
+            } else if (furniture.labyrinth == labID && furniture.HasSpace() && furniture.MatchesFilter(a_filterString)) {
                 candidates.emplace_back(handle, &furniture);
             }
         }
@@ -1090,6 +1144,9 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("SetActorAttribute", kClass, SetActorAttribute);
         a_vm->RegisterFunction("GetActorAttribute", kClass, GetActorAttribute);
 
+        a_vm->RegisterFunction("AddAnimation", kClass, AddAnimation);
+        a_vm->RegisterFunction("GetAnimation", kClass, GetAnimation);
+
         a_vm->RegisterFunction("GetActorsByRole", kClass, GetActorsByRole);
         a_vm->RegisterFunction("GetActorsByGlobalRole", kClass, GetActorsByGlobalRole);
         a_vm->RegisterFunction("GetActorLabyrinths", kClass, GetActorLabyrinths);
@@ -1101,6 +1158,7 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("ConfigureKeywords", kClass, ConfigureKeywords);
         a_vm->RegisterFunction("RegisterLabyrinth", kClass, RegisterLabyrinth);
         a_vm->RegisterFunction("GetLabyrinths", kClass, GetLabyrinths);
+        a_vm->RegisterFunction("TrySendAnimationEvent", kClass, TrySendAnimationEvent);
         a_vm->RegisterFunction("ScanAllLabyrinths", kClass, ScanAllLabyrinths);
         a_vm->RegisterFunction("IsPersistent", kClass, IsPersistent);
 

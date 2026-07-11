@@ -48,7 +48,9 @@ set(SOURCES
     src/Events/EquipEventSink.cpp
     src/State/ActorRegistry.cpp
     src/State/AliasPool.cpp
+    src/State/AnimationRegistry.cpp
     src/State/AttributeRegistry.cpp
+    src/State/FlagFilter.cpp
     src/State/GameState.cpp
     src/State/Labyrinth.cpp
     src/State/QueueRegistry.cpp
@@ -64,8 +66,10 @@ set(SOURCES
     src/State/ActorState.h
     src/State/ActorRegistry.h
     src/State/AliasPool.h
+    src/State/AnimationRegistry.h
     src/State/AttributeRegistry.h
     src/State/CaseFold.h
+    src/State/FlagFilter.h
     src/State/GameClock.h
     src/State/GameState.h
     src/State/Resource.h

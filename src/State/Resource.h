@@ -1,6 +1,6 @@
 #pragma once
 
-#include "State/CaseFold.h"
+#include "State/FlagFilter.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -45,17 +45,9 @@ namespace GK {
             return std::find(occupants.begin(), occupants.end(), a_actor) != occupants.end();
         }
 
-        // Flag filter used by the getters/assigners: true when the resource has
-        // at least ONE of a_anyOfFlags' characters, or when the filter is empty
-        // (no filter). Case-insensitive, like every Papyrus string vocabulary.
-        [[nodiscard]] bool HasAnyFlagOf(std::string_view a_anyOfFlags) const {
-            if (a_anyOfFlags.empty()) {
-                return true;
-            }
-            const auto have = FoldCase(flags);
-            const auto want = FoldCase(a_anyOfFlags);
-            return have.find_first_of(want) != std::string::npos;
-        }
+        // Flag filter used by the getters/assigners; see FlagFilter.h for the
+        // filter-string syntax ("" = no filter; malformed = matches nothing).
+        [[nodiscard]] bool MatchesFilter(std::string_view a_filter) const { return FlagFilter::Matches(flags, a_filter); }
     };
 
     // Typed container for one resource kind. Indexes by handle and by the

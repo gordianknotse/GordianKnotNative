@@ -1,6 +1,7 @@
 #pragma once
 
 #include "State/ActorRegistry.h"
+#include "State/AnimationRegistry.h"
 #include "State/AttributeRegistry.h"
 #include "State/Labyrinth.h"
 #include "State/QueueRegistry.h"
@@ -30,6 +31,9 @@ namespace GK {
         [[nodiscard]] std::unique_lock<std::recursive_mutex> Lock() { return std::unique_lock(_mutex); }
 
         [[nodiscard]] ActorRegistry& Actors() { return _actors; }
+        // Session config like _keywords: never serialized, not wiped by Reset
+        // (Papyrus re-adds its animations after each load; Add is idempotent).
+        [[nodiscard]] AnimationRegistry& Animations() { return _animations; }
         [[nodiscard]] AttributeRegistry& Attributes() { return _attributes; }
         [[nodiscard]] LabyrinthRegistry& Labyrinths() { return _labyrinths; }
         [[nodiscard]] QueueRegistry& Queues() { return _queues; }
@@ -70,6 +74,7 @@ namespace GK {
 
         std::recursive_mutex _mutex;
         ActorRegistry _actors;
+        AnimationRegistry _animations;
         AttributeRegistry _attributes;
         LabyrinthRegistry _labyrinths;
         QueueRegistry _queues;

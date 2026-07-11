@@ -297,6 +297,26 @@ Function SetActorAttribute(Actor akActor, String asKey, ObjectReference akValue)
 ObjectReference Function GetActorAttribute(Actor akActor, String asKey) Global Native
 
 ; =============================================================================
+; Animation registries  (asRegistry is a free-form registry name)
+; =============================================================================
+; Named, weighted pools of animation names: any String mints a registry on
+; first use, so plugins can define their own pools without enums or int
+; mappings (names are case-insensitive, like Papyrus string compares).
+; SESSION state, like the keyword config -- NOT saved: re-Add your animations
+; after each game load (AddAnimation is idempotent, so just re-run the setup).
+
+; Add asAnimation to asRegistry with the given draw weight, or UPDATE its
+; weight if it is already in there (re-registering converges instead of
+; accumulating). Weights are relative: an entry's chance is its weight divided
+; by the registry's total. False if either name is empty ("") or afWeight <= 0
+; (nothing is added).
+Bool Function AddAnimation(String asRegistry, String asAnimation, Float afWeight = 1.0) Global Native
+
+; A weighted-random animation name from asRegistry, or "" if the registry was
+; never used.
+String Function GetAnimation(String asRegistry) Global Native
+
+; =============================================================================
 ; Configuration & labyrinth lifecycle
 ; =============================================================================
 
@@ -345,6 +365,15 @@ Int Function ScanAllLabyrinths() Global Native
 ; helper -- reads the reference's persistent flag directly from the engine.
 Bool Function IsPersistent(ObjectReference akRef) Global Native
 
+; Debug.SendAnimationEvent with the engine's verdict surfaced: True when the
+; actor's behavior graph knows asEvent (the animation plays), False when it
+; does not -- i.e. the animation pack is missing OR installed but its
+; FNIS/Nemesis/Pandora patch was never generated. Use it for soft dependencies:
+; try the pack's event, fall back (or tell the player to run the generator, if
+; the pack's .esp IS loaded) on False. The actor's 3D must be loaded, or
+; installed events also report False.
+Bool Function TrySendAnimationEvent(Actor akActor, String asEvent) Global Native
+
 ; =============================================================================
 ; Alias pool  (per-NPC driver aliases, authored on one quest as GkNpcAlias000...)
 ; =============================================================================
@@ -369,14 +398,21 @@ Int Function CountFreeAliases(Quest akQuest) Global Native
 ; =============================================================================
 ; Cell FLAGS: a String where each CHARACTER is one flag (a cell may carry many).
 ; Configured in the CK on the door's GordianKnotCellDoor script (String property
-; `flags`, refreshed on every scan) or at runtime via SetCellFlags. Wherever a
-; function takes asAnyOfFlags, a cell passes the filter when it has AT LEAST ONE
-; of the filter's characters; an empty filter matches every cell. Comparison is
-; case-insensitive.
+; `flags`, refreshed on every scan) or at runtime via SetCellFlags.
+;
+; FILTER SYNTAX (every asFilterString parameter, cells and furniture alike):
+;   a       the resource has flag a      !a      does NOT have a
+;   (ab!c)  ALL terms must hold          [ab!c]  at least ONE term must hold
+;   X & Y   both sides must hold         X | Y   either side must hold
+; '&' binds tighter than '|'. Groups hold only flags (no operators/nesting
+; inside); combine groups with & and |, e.g. (ab) & [cd!e]. A bare run of
+; flags outside a group means ANY of them, so "abc" = [abc]. Whitespace is
+; ignored; matching is case-insensitive. "" matches everything; a MALFORMED
+; filter matches NOTHING (a warning lands in the log).
 
 ; All cell handles belonging to a labyrinth (its anchor reference), optionally
-; filtered by flags (see the header).
-Int[] Function GetCells(ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
+; filtered (see the filter syntax in the header).
+Int[] Function GetCells(ObjectReference akLabyrinth, String asFilterString = "") Global Native
 
 ObjectReference Function GetCellDoor(Int aiCell) Global Native
 ObjectReference Function GetCellInMarker(Int aiCell) Global Native
@@ -401,7 +437,7 @@ ObjectReference Function GetCellLabyrinth(Int aiCell) Global Native
 ; Returns 0 when no cell was assigned in akLabyrinth, or when a new actor
 ; cannot be tracked (adder -- see the alias-pool header); on 0 nothing has
 ; changed.
-Int Function AssignPrisonerToCell(Actor akActor, ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
+Int Function AssignPrisonerToCell(Actor akActor, ObjectReference akLabyrinth, String asFilterString = "") Global Native
 
 ; The handle of the cell akActor is assigned to, or 0 if unassigned.
 Int Function GetActorCell(Actor akActor) Global Native
@@ -425,15 +461,14 @@ ObjectReference Function GetMarkerLabyrinth(Int aiMarker) Global Native
 ; =============================================================================
 ; Furniture  (aiFurniture is a furniture handle; always single-occupant)
 ; =============================================================================
-; Furniture FLAGS work exactly like cell flags (see the Cells header): one flag
-; per character, matched case-insensitively; asAnyOfFlags passes when the
-; furniture has at least one of its characters, and an empty filter matches
-; everything. Configured in the CK on the furniture reference's
+; Furniture FLAGS work exactly like cell flags: one flag per character, and
+; every asFilterString parameter uses the FILTER SYNTAX documented in the
+; Cells header. Configured in the CK on the furniture reference's
 ; GordianKnotFurnitureAttribs script (String property `flags`, refreshed on
 ; every scan) or at runtime via SetFurnitureFlags.
 
-; All furniture handles belonging to a labyrinth, optionally filtered by flags.
-Int[] Function GetFurnitures(ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
+; All furniture handles belonging to a labyrinth, optionally filtered.
+Int[] Function GetFurnitures(ObjectReference akLabyrinth, String asFilterString = "") Global Native
 
 ObjectReference Function GetFurnitureRef(Int aiFurniture) Global Native
 
@@ -453,7 +488,7 @@ Function SetFurnitureFlags(Int aiFurniture, String asFlags) Global Native
 ; (otherwise 0). Returns 0 when nothing was assigned in akLabyrinth, or when a
 ; new actor cannot be tracked (adder -- see the alias-pool header); on 0
 ; nothing has changed.
-Int Function AssignPrisonerToFurniture(Actor akActor, ObjectReference akLabyrinth, String asAnyOfFlags = "") Global Native
+Int Function AssignPrisonerToFurniture(Actor akActor, ObjectReference akLabyrinth, String asFilterString = "") Global Native
 
 ; The handle of the furniture akActor is assigned to, or 0 if unassigned.
 Int Function GetActorFurniture(Actor akActor) Global Native
