@@ -267,10 +267,23 @@ Function ForgetActor(Actor akActor) Global Native
 ; time preserved) and are dropped by ClearQueue.
 Bool Function EnqueueActor(String asQueue, Actor akActor, Float afDelaySeconds = 0.0) Global Native
 
-; Pop and return the actor at the front of asQueue, or None if it is empty.
-; Entries that no longer resolve (actor deleted / its plugin removed) are
-; silently skipped, so the next live actor in line comes out.
-Actor Function DequeueActor(String asQueue) Global Native
+; With akActor = None: pop and return the actor at the front of asQueue, or
+; None if it is empty. Entries that no longer resolve (actor deleted / its
+; plugin removed) are silently skipped, so the next live actor in line comes
+; out. With akActor given: remove THAT actor from asQueue -- wherever it sits,
+; including a still-scheduled delayed entry (see EnqueueActor) -- and return
+; it if it was there, None otherwise.
+Actor Function DequeueActor(String asQueue, Actor akActor = None) Global Native
+
+; The actor at the front of asQueue WITHOUT removing it, or None if the queue
+; is empty. Stale entries in front of it are dropped exactly as a dequeue
+; would drop them, so what PeekActor returns is what DequeueActor would pop.
+Actor Function PeekActor(String asQueue) Global Native
+
+; The actor at the BACK of asQueue (the one enqueued last) WITHOUT removing
+; it, or None if the queue is empty. Stale entries behind it are dropped the
+; same way DequeueActor drops stale front entries.
+Actor Function PeekLastActor(String asQueue) Global Native
 
 ; How many actors are waiting in asQueue (0 if it was never used or is drained).
 Int Function GetQueueSize(String asQueue) Global Native

@@ -57,8 +57,39 @@ namespace GK {
         return id;
     }
 
+    RE::FormID QueueRegistry::PopBack(std::string_view a_queue) {
+        const auto it = _queues.find(FoldCase(a_queue));
+        if (it == _queues.end()) {
+            return 0;
+        }
+        const auto id = it->second.back();
+        it->second.pop_back();
+        if (it->second.empty()) {
+            _queues.erase(it);  // keep the invariant: no empty queues stored
+        }
+        return id;
+    }
+
     void QueueRegistry::PushFront(std::string_view a_queue, RE::FormID a_actor) {
         _queues[FoldCase(a_queue)].push_front(a_actor);
+    }
+
+    bool QueueRegistry::Remove(std::string_view a_queue, RE::FormID a_actor) {
+        const auto key = FoldCase(a_queue);
+        bool removed = false;
+        if (const auto it = _queues.find(key); it != _queues.end()) {
+            if (const auto pos = std::ranges::find(it->second, a_actor); pos != it->second.end()) {
+                it->second.erase(pos);
+                removed = true;
+                if (it->second.empty()) {
+                    _queues.erase(it);  // keep the invariant: no empty queues stored
+                }
+            }
+        }
+        removed |= std::erase_if(_delayed, [&](const DelayedEnqueue& d) {
+                       return d.queue == key && d.actor == a_actor;
+                   }) > 0;
+        return removed;
     }
 
     std::size_t QueueRegistry::Size(std::string_view a_queue) const {

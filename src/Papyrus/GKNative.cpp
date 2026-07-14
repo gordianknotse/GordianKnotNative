@@ -441,10 +441,48 @@ namespace {
         return nullptr;
     }
 
-    RE::Actor* DequeueActor(RE::StaticFunctionTag*, std::string_view a_queue) {
+    // No actor given: pop the front live entry. Actor given: remove THAT actor
+    // from a_queue -- including a still-scheduled delayed entry, like ClearQueue --
+    // and return it if it was there, None otherwise.
+    RE::Actor* DequeueActor(RE::StaticFunctionTag*, std::string_view a_queue, RE::Actor* a_actor) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
+        if (a_actor) {
+            state->Queues().PromoteDue(GK::NowSeconds());
+            return state->Queues().Remove(a_queue, a_actor->GetFormID()) ? a_actor : nullptr;
+        }
         return DequeueLiveActor(*state, a_queue);
+    }
+
+    // Front live actor of a_queue WITHOUT removing it (None if empty). Stale
+    // entries in front of it are dropped, exactly as a dequeue would, so what
+    // Peek returns is what the next DequeueActor pops.
+    RE::Actor* PeekActor(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        auto* actor = DequeueLiveActor(*state, a_queue);
+        if (actor) {
+            state->Queues().PushFront(a_queue, actor->GetFormID());  // put the peeked entry back
+        }
+        return actor;
+    }
+
+    // Last live actor of a_queue WITHOUT removing it (None if empty): the back
+    // mirror of PeekActor. Stale entries behind it are dropped the same way a
+    // dequeue drops stale front entries. Promotes due delayed enqueues first,
+    // so a ripe delayed actor can be the one peeked.
+    RE::Actor* PeekLastActor(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Queues().PromoteDue(GK::NowSeconds());
+        while (const auto id = state->Queues().PopBack(a_queue)) {
+            auto* form = RE::TESForm::LookupByID(id);
+            if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
+                state->Queues().Enqueue(a_queue, id);  // put the peeked entry back at the back
+                return actor;
+            }
+        }
+        return nullptr;
     }
 
     std::int32_t GetQueueSize(RE::StaticFunctionTag*, std::string_view a_queue) {
@@ -1138,6 +1176,8 @@ namespace GK::Papyrus {
 
         a_vm->RegisterFunction("EnqueueActor", kClass, EnqueueActor);
         a_vm->RegisterFunction("DequeueActor", kClass, DequeueActor);
+        a_vm->RegisterFunction("PeekActor", kClass, PeekActor);
+        a_vm->RegisterFunction("PeekLastActor", kClass, PeekLastActor);
         a_vm->RegisterFunction("GetQueueSize", kClass, GetQueueSize);
         a_vm->RegisterFunction("ClearQueue", kClass, ClearQueue);
 

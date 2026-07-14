@@ -54,10 +54,19 @@ namespace GK {
         // to skip (see the DequeueActor binding in GKNative.cpp).
         RE::FormID Dequeue(std::string_view a_queue);
 
+        // Pop and return the BACK FormID (0 if the queue is empty or unknown):
+        // the mirror of Dequeue, used by the PeekLastActor binding.
+        RE::FormID PopBack(std::string_view a_queue);
+
         // Put a_actor back at the FRONT of the named queue: undoes a Dequeue when
         // a compound operation fails after popping (no dedupe -- the caller just
         // popped this entry).
         void PushFront(std::string_view a_queue, RE::FormID a_actor);
+
+        // Remove a_actor from the named queue wherever it sits -- waiting entry or
+        // still-scheduled delayed entry (like ClearQueue, so a claimed actor can't
+        // resurface when its delay ripens). True if anything was removed.
+        bool Remove(std::string_view a_queue, RE::FormID a_actor);
 
         // Waiting entries in the named queue (0 if it doesn't exist).
         [[nodiscard]] std::size_t Size(std::string_view a_queue) const;
