@@ -1,5 +1,6 @@
 #include "Log.h"
 
+#include "Events/ActivateHook.h"
 #include "Events/EquipEventSink.h"
 #include "Papyrus/GKNative.h"
 #include "Serialization/Serialization.h"
@@ -27,6 +28,7 @@ namespace {
         case SKSE::MessagingInterface::kDataLoaded:
             // Game data is ready. Subsystems register here.
             GK::Events::EquipEventSink::Install();
+            GK::Events::ActivateHook::Install();
             // Still to come:
             //   - TESCombatEvent sink  (combat dispatch via SKSE task interface)
             break;

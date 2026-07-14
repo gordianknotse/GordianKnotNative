@@ -45,6 +45,7 @@ find_package(imgui CONFIG REQUIRED)  # debug overlay (src/UI), Dear ImGui + DX11
 # listed so IDEs (CLion / VS) surface them in the project tree.
 set(SOURCES
     src/Plugin.cpp
+    src/Events/ActivateHook.cpp
     src/Events/EquipEventSink.cpp
     src/State/ActorRegistry.cpp
     src/State/AliasPool.cpp
@@ -62,6 +63,7 @@ set(SOURCES
     src/Log.h
     src/PCH.h
     src/VmCall.h
+    src/Events/ActivateHook.h
     src/Events/EquipEventSink.h
     src/State/ActorState.h
     src/State/ActorRegistry.h
