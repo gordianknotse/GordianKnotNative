@@ -285,6 +285,19 @@ Actor Function PeekActor(String asQueue) Global Native
 ; same way DequeueActor drops stale front entries.
 Actor Function PeekLastActor(String asQueue) Global Native
 
+; The aiIndex-th actor of asQueue (0 = front) WITHOUT removing it; None once
+; aiIndex runs past the end (or is negative). Stale entries are dropped as
+; they are encountered, so indices range over LIVE actors only: a browse loop
+; (0, 1, 2, ... until None) enumerates exactly the queue's contents.
+Actor Function PeekActorAt(String asQueue, Int aiIndex) Global Native
+
+; Snapshot of asQueue's live actors, front to back (empty array if the queue
+; is empty or unknown). Stale entries are dropped like PeekActorAt, so the
+; array is exactly what successive dequeues would hand out, in order. Build
+; menus from this array and index back into it after the pick -- the queue
+; can change while a menu is open.
+Actor[] Function GetQueueActors(String asQueue) Global Native
+
 ; How many actors are waiting in asQueue (0 if it was never used or is drained).
 Int Function GetQueueSize(String asQueue) Global Native
 
@@ -294,11 +307,13 @@ Function ClearQueue(String asQueue) Global Native
 ; =============================================================================
 ; Actor attributes  (asKey is a free-form attribute name)
 ; =============================================================================
-; Per-actor key/value store: any String key holds one ObjectReference value per
-; actor, so plugins can define their own attributes without enums or int
-; mappings. Keys are case-insensitive (like Papyrus string compares).
-; Attributes are independent of tracking/roles -- setting one does NOT track the
-; actor or take a pool alias -- and they persist across save/load.
+; Per-actor key/value store: any String key holds one value per actor, so
+; plugins can define their own attributes without enums or int mappings. Two
+; independent stores (the same key names DIFFERENT attributes in each):
+; ObjectReference values and Int values. Keys are case-insensitive (like
+; Papyrus string compares). Attributes are independent of tracking/roles --
+; setting one does NOT track the actor or take a pool alias -- and they
+; persist across save/load.
 
 ; Set akActor's asKey attribute to akValue, overwriting any previous value.
 ; Pass akValue = None to clear the attribute. No-op if akActor is None or asKey
@@ -308,6 +323,22 @@ Function SetActorAttribute(Actor akActor, String asKey, ObjectReference akValue)
 ; akActor's asKey attribute, or None if it was never set, was cleared, or the
 ; stored reference no longer resolves (deleted / its plugin removed).
 ObjectReference Function GetActorAttribute(Actor akActor, String asKey) Global Native
+
+; Remove akActor's asKey attribute (no-op if it was never set). Equivalent to
+; SetActorAttribute(akActor, asKey, None).
+Function ClearActorAttribute(Actor akActor, String asKey) Global Native
+
+; Set akActor's asKey Int attribute to aiValue, overwriting any previous
+; value. EVERY value is stored -- 0 included -- so clearing goes through
+; ClearActorIntAttribute, not a sentinel. No-op if akActor is None or asKey
+; is empty ("").
+Function SetActorIntAttribute(Actor akActor, String asKey, Int aiValue) Global Native
+
+; akActor's asKey Int attribute, or aiDefault if it was never set or cleared.
+Int Function GetActorIntAttribute(Actor akActor, String asKey, Int aiDefault = 0) Global Native
+
+; Remove akActor's asKey Int attribute (no-op if it was never set).
+Function ClearActorIntAttribute(Actor akActor, String asKey) Global Native
 
 ; =============================================================================
 ; Animation registries  (asRegistry is a free-form registry name)
@@ -428,11 +459,29 @@ Int Function CountFreeAliases(Quest akQuest) Global Native
 Int[] Function GetCells(ObjectReference akLabyrinth, String asFilterString = "") Global Native
 
 ObjectReference Function GetCellDoor(Int aiCell) Global Native
+
+; The handle of the cell whose door is akDoor, or 0 if akDoor is None or not a
+; discovered cell door. Inverse of GetCellDoor; use it to turn the door ref
+; delivered by the GK_OnActivateCellDoor mod event back into a cell handle.
+Int Function GetCellByDoor(ObjectReference akDoor) Global Native
 ObjectReference Function GetCellInMarker(Int aiCell) Global Native
 ObjectReference Function GetCellOutMarker(Int aiCell) Global Native
 
 Int Function GetCellMaxOccupants(Int aiCell) Global Native
 Function SetCellMaxOccupants(Int aiCell, Int aiMax) Global Native
+
+; How many prisoners currently occupy aiCell (0 if the handle is unknown).
+Int Function GetCellOccupantCount(Int aiCell) Global Native
+
+; The aiIndex-th prisoner of aiCell (0 = first assigned, in assignment order),
+; or None if aiIndex is out of range / the handle is unknown / that occupant
+; no longer resolves. Read-only: never changes the cell's occupancy.
+Actor Function GetCellOccupantAt(Int aiCell, Int aiIndex) Global Native
+
+; Snapshot of aiCell's prisoners in assignment order (empty array if the
+; handle is unknown). Occupants that no longer resolve are skipped in the
+; result but left in the cell (read-only, like GetCellOccupantAt).
+Actor[] Function GetCellOccupants(Int aiCell) Global Native
 
 String Function GetCellFlags(Int aiCell) Global Native
 Function SetCellFlags(Int aiCell, String asFlags) Global Native

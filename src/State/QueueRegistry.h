@@ -58,6 +58,11 @@ namespace GK {
         // the mirror of Dequeue, used by the PeekLastActor binding.
         RE::FormID PopBack(std::string_view a_queue);
 
+        // The FormID at position a_index (0 = front) WITHOUT removing it (0 if
+        // the queue is unknown or a_index is past the end). Used by the
+        // PeekActorAt binding, which drops stale entries and retries the slot.
+        [[nodiscard]] RE::FormID At(std::string_view a_queue, std::size_t a_index) const;
+
         // Put a_actor back at the FRONT of the named queue: undoes a Dequeue when
         // a compound operation fails after popping (no dedupe -- the caller just
         // popped this entry).

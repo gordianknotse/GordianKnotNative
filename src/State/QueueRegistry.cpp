@@ -70,6 +70,14 @@ namespace GK {
         return id;
     }
 
+    RE::FormID QueueRegistry::At(std::string_view a_queue, std::size_t a_index) const {
+        const auto it = _queues.find(FoldCase(a_queue));
+        if (it == _queues.end() || a_index >= it->second.size()) {
+            return 0;
+        }
+        return it->second[a_index];
+    }
+
     void QueueRegistry::PushFront(std::string_view a_queue, RE::FormID a_actor) {
         _queues[FoldCase(a_queue)].push_front(a_actor);
     }

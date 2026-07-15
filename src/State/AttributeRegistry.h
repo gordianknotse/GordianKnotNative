@@ -5,11 +5,13 @@
 #include <unordered_map>
 
 namespace GK {
-    // Per-actor attribute store: a free-form String key -> ObjectReference value
-    // (held as a FormID), so Papyrus / other plugins can mint their own attributes
-    // without enums or handle mappings. Keys are case-insensitive (matching Papyrus
-    // string semantics); they are stored case-folded. Attributes are save state
-    // (serialized in the co-save; see Serialization.cpp).
+    // Per-actor attribute store: a free-form String key -> value, so Papyrus /
+    // other plugins can mint their own attributes without enums or handle
+    // mappings. Two independent stores (a key names different attributes in
+    // each): ObjectReference values (held as FormIDs) and plain int values.
+    // Keys are case-insensitive (matching Papyrus string semantics); they are
+    // stored case-folded. Attributes are save state (serialized in the co-save;
+    // see Serialization.cpp, ATTR / ATTI).
     //
     // NOT thread-safe on its own: GameState owns the instance and guards every call
     // with its mutex (see State/GameState.h). Operate on it only while holding that
@@ -18,6 +20,8 @@ namespace GK {
     public:
         // Case-folded attribute key -> value FormID.
         using AttributeMap = std::unordered_map<std::string, RE::FormID>;
+        // Case-folded attribute key -> int value.
+        using IntAttributeMap = std::unordered_map<std::string, std::int32_t>;
 
         // Set a_actor's a_key attribute to a_value. A value of 0 clears the
         // attribute (Papyrus passes None to clear).
@@ -27,18 +31,36 @@ namespace GK {
         // the FormID themselves (see the GetActorAttribute binding in GKNative.cpp).
         [[nodiscard]] RE::FormID Get(RE::FormID a_actor, std::string_view a_key) const;
 
+        // Set a_actor's a_key int attribute to a_value. Unlike Set, EVERY value
+        // is stored (0 is a legitimate int); removal goes through ClearInt.
+        void SetInt(RE::FormID a_actor, std::string_view a_key, std::int32_t a_value);
+
+        // Remove a_actor's a_key int attribute (no-op if never set).
+        void ClearInt(RE::FormID a_actor, std::string_view a_key);
+
+        // a_actor's a_key int attribute, or a_default if never set / cleared.
+        [[nodiscard]] std::int32_t GetInt(RE::FormID a_actor, std::string_view a_key, std::int32_t a_default) const;
+
         // Inserts or overwrites an actor's attributes wholesale (used by
         // serialization load; keys arrive already case-folded from the co-save).
         void Put(RE::FormID a_actor, AttributeMap a_attributes);
+        void PutInt(RE::FormID a_actor, IntAttributeMap a_attributes);
 
-        void Clear() { _attributes.clear(); }
+        void Clear() {
+            _attributes.clear();
+            _intAttributes.clear();
+        }
 
-        // Read access to the backing store (used by serialization). Keys of the
+        // Read access to the backing stores (used by serialization). Keys of the
         // inner maps are the case-folded attribute names; no actor in here has an
         // empty map (clearing the last attribute erases the actor's entry).
         [[nodiscard]] const std::unordered_map<RE::FormID, AttributeMap>& Actors() const { return _attributes; }
+        [[nodiscard]] const std::unordered_map<RE::FormID, IntAttributeMap>& IntActors() const {
+            return _intAttributes;
+        }
 
     private:
         std::unordered_map<RE::FormID, AttributeMap> _attributes;
+        std::unordered_map<RE::FormID, IntAttributeMap> _intAttributes;
     };
 }

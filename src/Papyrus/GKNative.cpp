@@ -485,6 +485,48 @@ namespace {
         return nullptr;
     }
 
+    // The a_index-th live actor of a_queue (0 = front) WITHOUT removing it;
+    // None once a_index runs past the end. Stale entries are dropped as they
+    // are encountered, so indices always range over live actors and a browse
+    // loop (0, 1, 2, ... until None) enumerates exactly the queue's contents.
+    RE::Actor* PeekActorAt(RE::StaticFunctionTag*, std::string_view a_queue, std::int32_t a_index) {
+        if (a_index < 0) {
+            return nullptr;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Queues().PromoteDue(GK::NowSeconds());
+        while (const auto id = state->Queues().At(a_queue, static_cast<std::size_t>(a_index))) {
+            auto* form = RE::TESForm::LookupByID(id);
+            if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
+                return actor;
+            }
+            state->Queues().Remove(a_queue, id);  // drop the stale entry; the slot now holds the next one
+        }
+        return nullptr;
+    }
+
+    // Snapshot of a_queue's live actors, front to back, taken under one lock.
+    // Stale entries are dropped as encountered (like PeekActorAt), so the array
+    // is exactly what successive dequeues would hand out, in order.
+    std::vector<RE::Actor*> GetQueueActors(RE::StaticFunctionTag*, std::string_view a_queue) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Queues().PromoteDue(GK::NowSeconds());
+        std::vector<RE::Actor*> out;
+        std::size_t i = 0;
+        while (const auto id = state->Queues().At(a_queue, i)) {
+            auto* form = RE::TESForm::LookupByID(id);
+            if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
+                out.push_back(actor);
+                ++i;
+            } else {
+                state->Queues().Remove(a_queue, id);  // drop the stale entry; the slot now holds the next one
+            }
+        }
+        return out;
+    }
+
     std::int32_t GetQueueSize(RE::StaticFunctionTag*, std::string_view a_queue) {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
@@ -598,6 +640,50 @@ namespace {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         return AsRef(state->Attributes().Get(a_actor->GetFormID(), a_key));
+    }
+
+    // Equivalent to SetActorAttribute(actor, key, None); paired with
+    // ClearActorIntAttribute for a symmetric surface.
+    void ClearActorAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().Set(a_actor->GetFormID(), a_key, 0);
+    }
+
+    // Int attributes are a store of their own (a key names different attributes
+    // here and in the ObjectReference store). Every value is stored -- 0 is a
+    // legitimate int, so removal goes through ClearActorIntAttribute, not a
+    // sentinel value.
+    void SetActorIntAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key,
+                              std::int32_t a_value) {
+        if (!a_actor || a_key.empty()) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().SetInt(a_actor->GetFormID(), a_key, a_value);
+    }
+
+    std::int32_t GetActorIntAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key,
+                                      std::int32_t a_default) {
+        if (!a_actor) {
+            return a_default;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return state->Attributes().GetInt(a_actor->GetFormID(), a_key, a_default);
+    }
+
+    void ClearActorIntAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().ClearInt(a_actor->GetFormID(), a_key);
     }
 
     // --- animation registries ---------------------------------------------------
@@ -860,6 +946,51 @@ namespace {
         if (auto* cell = state->Resources().CellPool().FindByHandle(a_cell)) {
             cell->maxOccupants = static_cast<std::uint32_t>(a_max);
         }
+    }
+
+    // The handle of the cell whose door is a_door (0 if a_door is None or not
+    // a discovered cell door). Inverse of GetCellDoor; pairs with the door ref
+    // delivered by the GK_OnActivateCellDoor mod event.
+    std::int32_t GetCellByDoor(RE::StaticFunctionTag*, RE::TESObjectREFR* a_door) {
+        if (!a_door) {
+            return 0;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* cell = state->Resources().CellPool().FindByKey(a_door->GetFormID());
+        return cell ? cell->handle : GK::kInvalidHandle;
+    }
+
+    std::int32_t GetCellOccupantCount(RE::StaticFunctionTag*, std::int32_t a_cell) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* cell = state->Resources().CellPool().FindByHandle(a_cell);
+        return cell ? static_cast<std::int32_t>(cell->occupants.size()) : 0;
+    }
+
+    // The a_index-th occupant (prisoner) of a_cell, in assignment order. None
+    // if the handle is unknown, a_index is out of range, or that occupant no
+    // longer resolves to an Actor. Read-only: a stale occupant is reported as
+    // None, not dropped -- occupancy only changes via the assign/clear paths.
+    RE::Actor* GetCellOccupantAt(RE::StaticFunctionTag*, std::int32_t a_cell, std::int32_t a_index) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* cell = state->Resources().CellPool().FindByHandle(a_cell);
+        if (!cell || a_index < 0 || static_cast<std::size_t>(a_index) >= cell->occupants.size()) {
+            return nullptr;
+        }
+        auto* form = RE::TESForm::LookupByID(cell->occupants[static_cast<std::size_t>(a_index)]);
+        return form ? form->As<RE::Actor>() : nullptr;
+    }
+
+    // Snapshot of a_cell's occupants (prisoners) in assignment order. Read-only
+    // like GetCellOccupantAt: an occupant that no longer resolves is skipped in
+    // the result but left in the cell.
+    std::vector<RE::Actor*> GetCellOccupants(RE::StaticFunctionTag*, std::int32_t a_cell) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* cell = state->Resources().CellPool().FindByHandle(a_cell);
+        return cell ? ResolveActors(cell->occupants) : std::vector<RE::Actor*>{};
     }
 
     std::string GetCellFlags(RE::StaticFunctionTag*, std::int32_t a_cell) {
@@ -1178,11 +1309,17 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("DequeueActor", kClass, DequeueActor);
         a_vm->RegisterFunction("PeekActor", kClass, PeekActor);
         a_vm->RegisterFunction("PeekLastActor", kClass, PeekLastActor);
+        a_vm->RegisterFunction("PeekActorAt", kClass, PeekActorAt);
+        a_vm->RegisterFunction("GetQueueActors", kClass, GetQueueActors);
         a_vm->RegisterFunction("GetQueueSize", kClass, GetQueueSize);
         a_vm->RegisterFunction("ClearQueue", kClass, ClearQueue);
 
         a_vm->RegisterFunction("SetActorAttribute", kClass, SetActorAttribute);
         a_vm->RegisterFunction("GetActorAttribute", kClass, GetActorAttribute);
+        a_vm->RegisterFunction("ClearActorAttribute", kClass, ClearActorAttribute);
+        a_vm->RegisterFunction("SetActorIntAttribute", kClass, SetActorIntAttribute);
+        a_vm->RegisterFunction("GetActorIntAttribute", kClass, GetActorIntAttribute);
+        a_vm->RegisterFunction("ClearActorIntAttribute", kClass, ClearActorIntAttribute);
 
         a_vm->RegisterFunction("AddAnimation", kClass, AddAnimation);
         a_vm->RegisterFunction("GetAnimation", kClass, GetAnimation);
@@ -1211,6 +1348,10 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("GetCellOutMarker", kClass, GetCellOutMarker);
         a_vm->RegisterFunction("GetCellMaxOccupants", kClass, GetCellMaxOccupants);
         a_vm->RegisterFunction("SetCellMaxOccupants", kClass, SetCellMaxOccupants);
+        a_vm->RegisterFunction("GetCellByDoor", kClass, GetCellByDoor);
+        a_vm->RegisterFunction("GetCellOccupantCount", kClass, GetCellOccupantCount);
+        a_vm->RegisterFunction("GetCellOccupantAt", kClass, GetCellOccupantAt);
+        a_vm->RegisterFunction("GetCellOccupants", kClass, GetCellOccupants);
         a_vm->RegisterFunction("GetCellFlags", kClass, GetCellFlags);
         a_vm->RegisterFunction("SetCellFlags", kClass, SetCellFlags);
         a_vm->RegisterFunction("GetCellLabyrinth", kClass, GetCellLabyrinth);
