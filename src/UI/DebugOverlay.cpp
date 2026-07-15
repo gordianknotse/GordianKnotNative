@@ -28,7 +28,8 @@
 //
 // Input policy (per design): while the panel is open, MOUSE events are consumed
 // by the panel (camera stops turning); KEYBOARD stays with the game unless an
-// ImGui text field is focused (io.WantTextInput). Ctrl+Shift+G always toggles.
+// ImGui text field is focused (io.WantTextInput). Shift+G toggles, except
+// while a text field is focused (so a typed 'G' doesn't close the panel).
 //
 // Everything drawn is read-only over GameState (under its lock); the only
 // mutating actions are explicitly-safe buttons ("Run ScanAllLabyrinths",
@@ -830,7 +831,7 @@ namespace {
             g_mouseX = io.DisplaySize.x * 0.5f;
             g_mouseY = io.DisplaySize.y * 0.5f;
             g_imguiReady = true;
-            logger::info("DebugOverlay: ImGui initialized ({}x{}). Toggle with Ctrl+Shift+G.",
+            logger::info("DebugOverlay: ImGui initialized ({}x{}). Toggle with Shift+G.",
                          desc.BufferDesc.Width, desc.BufferDesc.Height);
         }
         static inline REL::Relocation<decltype(thunk)> func;
@@ -899,8 +900,9 @@ namespace {
                 } else if (code == kDIK_LShift || code == kDIK_RShift) {
                     g_shiftHeld = button->IsPressed();
                 }
-                // The toggle always wins (even while a text field is focused).
-                if (code == kDIK_G && button->IsDown() && g_ctrlHeld && g_shiftHeld) {
+                // The toggle wins unless a text field is focused (typing an
+                // uppercase 'G' into the filter box must not close the panel).
+                if (code == kDIK_G && button->IsDown() && g_shiftHeld && !(visible && io.WantTextInput)) {
                     const bool nowVisible = !g_visible.load(std::memory_order_relaxed);
                     g_visible.store(nowVisible, std::memory_order_relaxed);
                     if (nowVisible && g_imguiReady) {
@@ -997,6 +999,6 @@ namespace GK::UI {
                                                     REL::VariantOffset(0x7B, 0x7B, 0x0)};
         InputDispatchHook::func = trampoline.write_call<5>(input.address(), InputDispatchHook::thunk);
 
-        logger::info("DebugOverlay: hooks installed (toggle: Ctrl+Shift+G).");
+        logger::info("DebugOverlay: hooks installed (toggle: Shift+G).");
     }
 }
