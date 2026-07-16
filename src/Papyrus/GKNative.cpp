@@ -1322,8 +1322,8 @@ namespace {
     // a_labyrinth (otherwise 0: nothing was assigned there). Assigning a NEW
     // actor is an adder (see SetActorStatus): if the actor can't be tracked,
     // nothing changes and 0 is returned.
-    std::int32_t AssignPrisonerToFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
-                                           std::string_view a_filterString) {
+    std::int32_t AssignFreeFurnitureToPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor,
+                                               RE::TESObjectREFR* a_labyrinth, std::string_view a_filterString) {
         if (!a_actor || !a_labyrinth) {
             return GK::kInvalidHandle;
         }
@@ -1355,6 +1355,77 @@ namespace {
         }
         target->occupants.push_back(actorID);
         return targetHandle;
+    }
+
+    // The handle of the furniture whose reference is a_ref (0 if a_ref is None
+    // or not discovered furniture). Inverse of GetFurnitureRef; pairs with the
+    // ref delivered by the GK_OnActivateFurniture mod event.
+    std::int32_t GetFurnitureByRef(RE::StaticFunctionTag*, RE::TESObjectREFR* a_ref) {
+        if (!a_ref) {
+            return GK::kInvalidHandle;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* furniture = state->Resources().FurniturePool().FindByKey(a_ref->GetFormID());
+        return furniture ? furniture->handle : GK::kInvalidHandle;
+    }
+
+    // Free spots left in a_furniture: 1 = free, 0 = occupied or the handle is
+    // unknown (furniture is single-occupant; computed like GetCellVacancy).
+    std::int32_t GetFurnitureVacancy(RE::StaticFunctionTag*, std::int32_t a_furniture) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* furniture = state->Resources().FurniturePool().FindByHandle(a_furniture);
+        if (!furniture || furniture->occupants.size() >= furniture->maxOccupants) {
+            return 0;
+        }
+        return static_cast<std::int32_t>(furniture->maxOccupants - furniture->occupants.size());
+    }
+
+    // The actor occupying a_furniture (single-occupant), or None if it is
+    // free, the handle is unknown, or the occupant no longer resolves.
+    // Read-only, like GetCellOccupantAt.
+    RE::Actor* GetFurnitureOccupant(RE::StaticFunctionTag*, std::int32_t a_furniture) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* furniture = state->Resources().FurniturePool().FindByHandle(a_furniture);
+        if (!furniture || furniture->occupants.empty()) {
+            return nullptr;
+        }
+        auto* form = RE::TESForm::LookupByID(furniture->occupants.front());
+        return form ? form->As<RE::Actor>() : nullptr;
+    }
+
+    // Assign the SPECIFIC furniture a_furniture to the actor (handles are
+    // unique across all labyrinths, so the furniture alone identifies the
+    // target): false if the furniture is unknown or has no space left; true
+    // (no change) if the actor already occupies it. Otherwise the same
+    // contract as the free-furniture assigner: an actor occupying another
+    // furniture -- in ANY labyrinth -- is MOVED, and assigning a NEW actor is
+    // an adder (untrackable -> false, nothing changes).
+    bool AssignPrisonerToFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_furniture) {
+        if (!a_actor) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto actorID = a_actor->GetFormID();
+
+        auto* target = state->Resources().FurniturePool().FindByHandle(a_furniture);
+        if (!target) {
+            return false;
+        }
+        if (target->Contains(actorID)) {
+            return true;
+        }
+        if (!target->HasSpace() || !GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
+        for (auto& [handle, furniture] : state->Resources().FurniturePool().All()) {
+            std::erase(furniture.occupants, actorID);  // moved: leave the current furniture (normally at most one)
+        }
+        target->occupants.push_back(actorID);
+        return true;
     }
 
     std::int32_t GetActorFurniture(RE::StaticFunctionTag*, RE::Actor* a_actor) {
@@ -1493,6 +1564,10 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("GetFurnitureFlags", kClass, GetFurnitureFlags);
         a_vm->RegisterFunction("SetFurnitureFlags", kClass, SetFurnitureFlags);
         a_vm->RegisterFunction("GetFurnitures", kClass, GetFurnitures);
+        a_vm->RegisterFunction("GetFurnitureByRef", kClass, GetFurnitureByRef);
+        a_vm->RegisterFunction("GetFurnitureVacancy", kClass, GetFurnitureVacancy);
+        a_vm->RegisterFunction("GetFurnitureOccupant", kClass, GetFurnitureOccupant);
+        a_vm->RegisterFunction("AssignFreeFurnitureToPrisoner", kClass, AssignFreeFurnitureToPrisoner);
         a_vm->RegisterFunction("AssignPrisonerToFurniture", kClass, AssignPrisonerToFurniture);
         a_vm->RegisterFunction("GetActorFurniture", kClass, GetActorFurniture);
         a_vm->RegisterFunction("ClearActorFurniture", kClass, ClearActorFurniture);

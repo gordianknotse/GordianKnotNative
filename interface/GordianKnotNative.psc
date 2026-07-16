@@ -561,10 +561,23 @@ Int[] Function GetFurnitures(ObjectReference akLabyrinth, String asFilterString 
 
 ObjectReference Function GetFurnitureRef(Int aiFurniture) Global Native
 
+; The handle of the furniture whose reference is akRef, or 0 if akRef is None
+; or not discovered furniture. Inverse of GetFurnitureRef; use it to turn the
+; ref delivered by the GK_OnActivateFurniture mod event back into a handle.
+Int Function GetFurnitureByRef(ObjectReference akRef) Global Native
+
 ObjectReference Function GetFurnitureLabyrinth(Int aiFurniture) Global Native
 
 String Function GetFurnitureFlags(Int aiFurniture) Global Native
 Function SetFurnitureFlags(Int aiFurniture, String asFlags) Global Native
+
+; 1 if aiFurniture is free, 0 if it is occupied -- or the handle is unknown.
+Int Function GetFurnitureVacancy(Int aiFurniture) Global Native
+
+; The actor occupying aiFurniture, or None if it is free, the handle is
+; unknown, or the occupant no longer resolves. Read-only: never changes the
+; furniture's occupancy.
+Actor Function GetFurnitureOccupant(Int aiFurniture) Global Native
 
 ; Assign akActor to a free furniture of akLabyrinth ONLY, passing the flag
 ; filter -- picked at RANDOM (uniform among the matching furniture); returns
@@ -577,7 +590,16 @@ Function SetFurnitureFlags(Int aiFurniture, String asFlags) Global Native
 ; (otherwise 0). Returns 0 when nothing was assigned in akLabyrinth, or when a
 ; new actor cannot be tracked (adder -- see the alias-pool header); on 0
 ; nothing has changed.
-Int Function AssignPrisonerToFurniture(Actor akActor, ObjectReference akLabyrinth, String asFilterString = "") Global Native
+Int Function AssignFreeFurnitureToPrisoner(Actor akActor, ObjectReference akLabyrinth, String asFilterString = "") Global Native
+
+; Assign the SPECIFIC furniture aiFurniture to akActor (handles are unique
+; across all labyrinths, so the furniture alone identifies the target). False
+; if the furniture doesn't exist, is already occupied, or a new actor cannot
+; be tracked (adder -- see the alias-pool header); on False nothing has
+; changed. True if akActor already occupies aiFurniture (no change). If
+; akActor occupies another furniture -- in any labyrinth -- it is MOVED to
+; aiFurniture.
+Bool Function AssignPrisonerToFurniture(Actor akActor, Int aiFurniture) Global Native
 
 ; The handle of the furniture akActor is assigned to, or 0 if unassigned.
 Int Function GetActorFurniture(Actor akActor) Global Native
