@@ -291,6 +291,21 @@ Actor Function PeekLastActor(String asQueue) Global Native
 ; (0, 1, 2, ... until None) enumerates exactly the queue's contents.
 Actor Function PeekActorAt(String asQueue, Int aiIndex) Global Native
 
+; The neighbors of asQueue's aiIndex-th actor, as a 2-element array:
+; [0] = the actor just before it (towards the FRONT; None when aiIndex is 0),
+; [1] = the actor just after it (towards the BACK; None when aiIndex is the
+; last index). Both None when aiIndex is negative or the queue is empty or
+; unknown. Same index space as PeekActorAt (live actors; stale entries are
+; dropped), and both neighbors are read atomically.
+Actor[] Function PeekAdjacentActorsAt(String asQueue, Int aiIndex) Global Native
+
+; PeekAdjacentActorsAt keyed by the actor instead of its index: the neighbors
+; of akActor in asQueue ([0] = just before it, towards the FRONT; [1] = just
+; after it, towards the BACK; None past either end). Both None when akActor is
+; None or not in the queue. Stale entries are dropped, and both neighbors are
+; read atomically.
+Actor[] Function PeekAdjacentActors(String asQueue, Actor akActor) Global Native
+
 ; Snapshot of asQueue's live actors, front to back (empty array if the queue
 ; is empty or unknown). Stale entries are dropped like PeekActorAt, so the
 ; array is exactly what successive dequeues would hand out, in order. Build
@@ -473,6 +488,10 @@ Function SetCellMaxOccupants(Int aiCell, Int aiMax) Global Native
 ; How many prisoners currently occupy aiCell (0 if the handle is unknown).
 Int Function GetCellOccupantCount(Int aiCell) Global Native
 
+; Free spots left in aiCell (maxOccupants - occupants). 0 means full -- or
+; the handle is unknown.
+Int Function GetCellVacancy(Int aiCell) Global Native
+
 ; The aiIndex-th prisoner of aiCell (0 = first assigned, in assignment order),
 ; or None if aiIndex is out of range / the handle is unknown / that occupant
 ; no longer resolves. Read-only: never changes the cell's occupancy.
@@ -499,7 +518,15 @@ ObjectReference Function GetCellLabyrinth(Int aiCell) Global Native
 ; Returns 0 when no cell was assigned in akLabyrinth, or when a new actor
 ; cannot be tracked (adder -- see the alias-pool header); on 0 nothing has
 ; changed.
-Int Function AssignPrisonerToCell(Actor akActor, ObjectReference akLabyrinth, String asFilterString = "") Global Native
+Int Function AssignFreeCellToPrisoner(Actor akActor, ObjectReference akLabyrinth, String asFilterString = "") Global Native
+
+; Assign the SPECIFIC cell aiCell to akActor (handles are unique across all
+; labyrinths, so the cell alone identifies the target). False if the cell
+; doesn't exist, is already full, or a new actor cannot be tracked (adder --
+; see the alias-pool header); on False nothing has changed. True if akActor
+; already occupies aiCell (no change). If akActor occupies another cell -- in
+; any labyrinth -- it is MOVED to aiCell.
+Bool Function AssignPrisonerToCell(Actor akActor, Int aiCell) Global Native
 
 ; The handle of the cell akActor is assigned to, or 0 if unassigned.
 Int Function GetActorCell(Actor akActor) Global Native
@@ -541,7 +568,7 @@ Function SetFurnitureFlags(Int aiFurniture, String asFlags) Global Native
 
 ; Assign akActor to a free furniture of akLabyrinth ONLY, passing the flag
 ; filter -- picked at RANDOM (uniform among the matching furniture); returns
-; the claimed furniture's handle. Same contract as AssignPrisonerToCell (each
+; the claimed furniture's handle. Same contract as AssignFreeCellToPrisoner (each
 ; furniture holds one actor). akLabyrinth must not be None (else 0, nothing
 ; assigned). If the actor already occupies a furniture -- in any labyrinth --
 ; it is MOVED to the picked one (its current furniture is never re-picked);

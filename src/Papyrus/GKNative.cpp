@@ -485,25 +485,99 @@ namespace {
         return nullptr;
     }
 
+    // The a_index-th LIVE actor of a_queue counting from the front, dropping
+    // stale entries as they are encountered (nullptr once past the end), so
+    // indices always range over live actors. Caller must hold the GameState
+    // lock and have promoted due enqueues.
+    RE::Actor* NthLiveActor(GK::GameState& a_state, std::string_view a_queue, std::int32_t a_index) {
+        if (a_index < 0) {
+            return nullptr;
+        }
+        std::int32_t live = 0;
+        std::size_t pos = 0;
+        while (const auto id = a_state.Queues().At(a_queue, pos)) {
+            auto* form = RE::TESForm::LookupByID(id);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            if (!actor) {
+                a_state.Queues().Remove(a_queue, id);  // drop the stale entry; re-test the same slot
+                continue;
+            }
+            if (live == a_index) {
+                return actor;
+            }
+            ++live;
+            ++pos;
+        }
+        return nullptr;
+    }
+
     // The a_index-th live actor of a_queue (0 = front) WITHOUT removing it;
     // None once a_index runs past the end. Stale entries are dropped as they
     // are encountered, so indices always range over live actors and a browse
     // loop (0, 1, 2, ... until None) enumerates exactly the queue's contents.
     RE::Actor* PeekActorAt(RE::StaticFunctionTag*, std::string_view a_queue, std::int32_t a_index) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Queues().PromoteDue(GK::NowSeconds());
+        return NthLiveActor(*state, a_queue, a_index);
+    }
+
+    // The neighbors of a_queue's a_index-th live actor: [0] the one just
+    // before it (towards the FRONT; None when a_index is 0), [1] the one just
+    // after it (towards the BACK; None when a_index is the last). Always two
+    // elements; both None when a_index is negative. Same live-index space as
+    // PeekActorAt, both lookups under the one lock.
+    std::vector<RE::Actor*> PeekAdjacentActorsAt(RE::StaticFunctionTag*, std::string_view a_queue,
+                                                 std::int32_t a_index) {
+        std::vector<RE::Actor*> out{nullptr, nullptr};
         if (a_index < 0) {
-            return nullptr;
+            return out;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         state->Queues().PromoteDue(GK::NowSeconds());
-        while (const auto id = state->Queues().At(a_queue, static_cast<std::size_t>(a_index))) {
-            auto* form = RE::TESForm::LookupByID(id);
-            if (auto* actor = form ? form->As<RE::Actor>() : nullptr) {
-                return actor;
-            }
-            state->Queues().Remove(a_queue, id);  // drop the stale entry; the slot now holds the next one
+        out[0] = NthLiveActor(*state, a_queue, a_index - 1);  // nullptr when a_index == 0
+        out[1] = NthLiveActor(*state, a_queue, a_index + 1);
+        return out;
+    }
+
+    // PeekAdjacentActorsAt keyed by the actor instead of its index: the
+    // neighbors of a_actor in a_queue ([0] towards the front, [1] towards the
+    // back, None past either end). Both None when a_actor is None or not in
+    // the queue. Single front-to-back walk under the one lock, dropping stale
+    // entries like the other peeks.
+    std::vector<RE::Actor*> PeekAdjacentActors(RE::StaticFunctionTag*, std::string_view a_queue, RE::Actor* a_actor) {
+        std::vector<RE::Actor*> out{nullptr, nullptr};
+        if (!a_actor) {
+            return out;
         }
-        return nullptr;
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Queues().PromoteDue(GK::NowSeconds());
+        const auto target = a_actor->GetFormID();
+        RE::Actor* prev = nullptr;
+        bool found = false;
+        std::size_t pos = 0;
+        while (const auto id = state->Queues().At(a_queue, pos)) {
+            auto* form = RE::TESForm::LookupByID(id);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            if (!actor) {
+                state->Queues().Remove(a_queue, id);  // drop the stale entry; re-test the same slot
+                continue;
+            }
+            if (found) {
+                out[1] = actor;
+                break;
+            }
+            if (id == target) {
+                found = true;
+                out[0] = prev;  // nullptr when a_actor is at the front
+            } else {
+                prev = actor;
+            }
+            ++pos;
+        }
+        return out;
     }
 
     // Snapshot of a_queue's live actors, front to back, taken under one lock.
@@ -968,6 +1042,18 @@ namespace {
         return cell ? static_cast<std::int32_t>(cell->occupants.size()) : 0;
     }
 
+    // Free spots left in a_cell (maxOccupants - occupants); 0 = full or the
+    // handle is unknown. Clamped to 0 if occupancy exceeds a lowered max.
+    std::int32_t GetCellVacancy(RE::StaticFunctionTag*, std::int32_t a_cell) {
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* cell = state->Resources().CellPool().FindByHandle(a_cell);
+        if (!cell || cell->occupants.size() >= cell->maxOccupants) {
+            return 0;
+        }
+        return static_cast<std::int32_t>(cell->maxOccupants - cell->occupants.size());
+    }
+
     // The a_index-th occupant (prisoner) of a_cell, in assignment order. None
     // if the handle is unknown, a_index is out of range, or that occupant no
     // longer resolves to an Actor. Read-only: a stale occupant is reported as
@@ -1041,8 +1127,8 @@ namespace {
     // nothing was assigned there). Assigning a NEW actor is an adder (see
     // SetActorStatus): if the actor can't be tracked, nothing changes and 0 is
     // returned.
-    std::int32_t AssignPrisonerToCell(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
-                                      std::string_view a_filterString) {
+    std::int32_t AssignFreeCellToPrisoner(RE::StaticFunctionTag*, RE::Actor* a_actor, RE::TESObjectREFR* a_labyrinth,
+                                          std::string_view a_filterString) {
         if (!a_actor || !a_labyrinth) {
             return GK::kInvalidHandle;
         }
@@ -1074,6 +1160,38 @@ namespace {
         }
         target->occupants.push_back(actorID);
         return targetHandle;
+    }
+
+    // Assign the SPECIFIC cell a_cell to the actor (handles are unique across
+    // all labyrinths, so the cell alone identifies the target): false if the
+    // cell is unknown or has no space left; true (no change) if the actor
+    // already occupies it. Otherwise the same contract as the free-cell
+    // assigner: an actor occupying another cell -- in ANY labyrinth -- is
+    // MOVED, and assigning a NEW actor is an adder (untrackable -> false,
+    // nothing changes).
+    bool AssignPrisonerToCell(RE::StaticFunctionTag*, RE::Actor* a_actor, std::int32_t a_cell) {
+        if (!a_actor) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto actorID = a_actor->GetFormID();
+
+        auto* target = state->Resources().CellPool().FindByHandle(a_cell);
+        if (!target) {
+            return false;
+        }
+        if (target->Contains(actorID)) {
+            return true;
+        }
+        if (!target->HasSpace() || !GK::AliasPool::EnsureTrackable(*state, *a_actor)) {
+            return false;
+        }
+        for (auto& [handle, cell] : state->Resources().CellPool().All()) {
+            std::erase(cell.occupants, actorID);  // moved: leave the current cell (normally at most one)
+        }
+        target->occupants.push_back(actorID);
+        return true;
     }
 
     std::int32_t GetActorCell(RE::StaticFunctionTag*, RE::Actor* a_actor) {
@@ -1194,7 +1312,7 @@ namespace {
     }
 
     // Claim a free furniture for an actor; returns the claimed furniture's handle
-    // (0 = none). Same contract as AssignPrisonerToCell (furniture is
+    // (0 = none). Same contract as AssignFreeCellToPrisoner (furniture is
     // single-occupant): candidates are the furniture of a_labyrinth ONLY (null
     // labyrinth -> 0, no effect) that have space and pass the flag filter; one is
     // picked at RANDOM (uniform among the candidates). If the actor already
@@ -1310,6 +1428,8 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("PeekActor", kClass, PeekActor);
         a_vm->RegisterFunction("PeekLastActor", kClass, PeekLastActor);
         a_vm->RegisterFunction("PeekActorAt", kClass, PeekActorAt);
+        a_vm->RegisterFunction("PeekAdjacentActorsAt", kClass, PeekAdjacentActorsAt);
+        a_vm->RegisterFunction("PeekAdjacentActors", kClass, PeekAdjacentActors);
         a_vm->RegisterFunction("GetQueueActors", kClass, GetQueueActors);
         a_vm->RegisterFunction("GetQueueSize", kClass, GetQueueSize);
         a_vm->RegisterFunction("ClearQueue", kClass, ClearQueue);
@@ -1350,12 +1470,14 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("SetCellMaxOccupants", kClass, SetCellMaxOccupants);
         a_vm->RegisterFunction("GetCellByDoor", kClass, GetCellByDoor);
         a_vm->RegisterFunction("GetCellOccupantCount", kClass, GetCellOccupantCount);
+        a_vm->RegisterFunction("GetCellVacancy", kClass, GetCellVacancy);
         a_vm->RegisterFunction("GetCellOccupantAt", kClass, GetCellOccupantAt);
         a_vm->RegisterFunction("GetCellOccupants", kClass, GetCellOccupants);
         a_vm->RegisterFunction("GetCellFlags", kClass, GetCellFlags);
         a_vm->RegisterFunction("SetCellFlags", kClass, SetCellFlags);
         a_vm->RegisterFunction("GetCellLabyrinth", kClass, GetCellLabyrinth);
         a_vm->RegisterFunction("GetCells", kClass, GetCells);
+        a_vm->RegisterFunction("AssignFreeCellToPrisoner", kClass, AssignFreeCellToPrisoner);
         a_vm->RegisterFunction("AssignPrisonerToCell", kClass, AssignPrisonerToCell);
         a_vm->RegisterFunction("GetActorCell", kClass, GetActorCell);
         a_vm->RegisterFunction("ClearActorCell", kClass, ClearActorCell);
