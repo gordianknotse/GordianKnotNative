@@ -760,6 +760,102 @@ namespace {
         state->Attributes().ClearInt(a_actor->GetFormID(), a_key);
     }
 
+    // Array attributes are a third store (a key names different attributes in
+    // each store). Values are held as FormIDs, so any form types may mix in one
+    // array; Papyrus declares Form[] and casts per element on read (array types
+    // are invariant in Papyrus -- an Actor[] variable must be copied into a
+    // Form[] to be passed here). POSITIONAL: None entries are stored as real
+    // slots and read back as None, so indices are stable (see the *Index
+    // bindings). An EMPTY array clears the attribute.
+    void SetActorArrayAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key,
+                                std::vector<RE::TESForm*> a_values) {
+        if (!a_actor || a_key.empty()) {
+            return;
+        }
+        std::vector<RE::FormID> ids;
+        ids.reserve(a_values.size());
+        for (const auto* form : a_values) {
+            ids.push_back(form ? form->GetFormID() : 0);  // None -> placeholder slot
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().SetArray(a_actor->GetFormID(), a_key, std::move(ids));
+    }
+
+    // Empty array if never set / cleared; otherwise the SAME LENGTH as stored,
+    // with None at every slot that is a None placeholder or no longer resolves
+    // (unresolvable entries stay stored -- the co-save load zeroes them for
+    // good on the next save/load cycle).
+    std::vector<RE::TESForm*> GetActorArrayAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor,
+                                                     std::string_view a_key) {
+        if (!a_actor) {
+            return {};
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* ids = state->Attributes().GetArray(a_actor->GetFormID(), a_key);
+        if (!ids) {
+            return {};
+        }
+        std::vector<RE::TESForm*> out;
+        out.reserve(ids->size());
+        for (const auto id : *ids) {
+            out.push_back(id ? RE::TESForm::LookupByID(id) : nullptr);
+        }
+        return out;
+    }
+
+    // Safety cap for indexed writes: a script bug passing a huge index must not
+    // allocate an arbitrarily large array.
+    constexpr std::int32_t kMaxArrayAttributeIndex = 1023;
+
+    // Set one position of the array attribute (0-indexed). An index past the
+    // current end EXTENDS the array, filling the gap with None slots; setting
+    // on a nonexistent attribute creates it. Out-of-range indices (< 0 or >
+    // 1023) are ignored.
+    void SetActorArrayAttributeIndex(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key,
+                                     std::int32_t a_index, RE::TESForm* a_value) {
+        if (!a_actor || a_key.empty()) {
+            return;
+        }
+        if (a_index < 0 || a_index > kMaxArrayAttributeIndex) {
+            logger::warn("SetActorArrayAttributeIndex: index {} out of range [0, {}]; ignored.", a_index,
+                         kMaxArrayAttributeIndex);
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().SetArrayIndex(a_actor->GetFormID(), a_key, static_cast<std::size_t>(a_index),
+                                          a_value ? a_value->GetFormID() : 0);
+    }
+
+    // The form at one position of the array attribute; None when the index is
+    // out of bounds, the slot is a None placeholder, or the entry no longer
+    // resolves.
+    RE::TESForm* GetActorArrayAttributeIndex(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key,
+                                             std::int32_t a_index) {
+        if (!a_actor || a_index < 0) {
+            return nullptr;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        const auto* ids = state->Attributes().GetArray(a_actor->GetFormID(), a_key);
+        if (!ids || static_cast<std::size_t>(a_index) >= ids->size()) {
+            return nullptr;
+        }
+        const auto id = (*ids)[static_cast<std::size_t>(a_index)];
+        return id ? RE::TESForm::LookupByID(id) : nullptr;
+    }
+
+    void ClearActorArrayAttribute(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_key) {
+        if (!a_actor) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Attributes().SetArray(a_actor->GetFormID(), a_key, {});
+    }
+
     // --- animation registries ---------------------------------------------------
     // Named, weighted pools of animation names: any String mints a registry on
     // first use (names case-insensitive, like Papyrus). SESSION config like the
@@ -1511,6 +1607,11 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("SetActorIntAttribute", kClass, SetActorIntAttribute);
         a_vm->RegisterFunction("GetActorIntAttribute", kClass, GetActorIntAttribute);
         a_vm->RegisterFunction("ClearActorIntAttribute", kClass, ClearActorIntAttribute);
+        a_vm->RegisterFunction("SetActorArrayAttribute", kClass, SetActorArrayAttribute);
+        a_vm->RegisterFunction("GetActorArrayAttribute", kClass, GetActorArrayAttribute);
+        a_vm->RegisterFunction("ClearActorArrayAttribute", kClass, ClearActorArrayAttribute);
+        a_vm->RegisterFunction("SetActorArrayAttributeIndex", kClass, SetActorArrayAttributeIndex);
+        a_vm->RegisterFunction("GetActorArrayAttributeIndex", kClass, GetActorArrayAttributeIndex);
 
         a_vm->RegisterFunction("AddAnimation", kClass, AddAnimation);
         a_vm->RegisterFunction("GetAnimation", kClass, GetAnimation);

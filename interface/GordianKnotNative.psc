@@ -355,6 +355,38 @@ Int Function GetActorIntAttribute(Actor akActor, String asKey, Int aiDefault = 0
 ; Remove akActor's asKey Int attribute (no-op if it was never set).
 Function ClearActorIntAttribute(Actor akActor, String asKey) Global Native
 
+; Set akActor's asKey ARRAY attribute (a third store; the same key names
+; different attributes in each). Values are stored by FormID, so any form
+; types may mix in one array. POSITIONAL: order is preserved and None
+; entries are stored as real slots (indices are stable -- see the *Index
+; functions). An EMPTY array clears the attribute. NOTE Papyrus array types
+; are invariant: declare your variable as Form[] -- an Actor[] cannot be
+; passed here directly, copy it into a Form[] first.
+Function SetActorArrayAttribute(Actor akActor, String asKey, Form[] akValues) Global Native
+
+; akActor's asKey array attribute, or an empty array if it was never set or
+; cleared; otherwise the SAME LENGTH as stored, with None at every empty
+; slot and at entries that no longer resolve (deleted / plugin removed).
+; Cast per element on the way out (e.g. arr[i] as Actor).
+Form[] Function GetActorArrayAttribute(Actor akActor, String asKey) Global Native
+
+; Remove akActor's asKey array attribute (no-op if it was never set).
+; Equivalent to SetActorArrayAttribute with an empty array.
+Function ClearActorArrayAttribute(Actor akActor, String asKey) Global Native
+
+; Set position aiIndex (0-indexed) of akActor's asKey array attribute. An
+; index past the current end EXTENDS the array, filling the gap with None:
+; on a 2-element array, setting index 4 makes it 5 long with indices 2 and 3
+; None. Setting on a nonexistent attribute creates it. akValue = None stores
+; a None slot (does NOT shrink the array). Indices outside [0, 1023] are
+; ignored (safety cap).
+Function SetActorArrayAttributeIndex(Actor akActor, String asKey, Int aiIndex, Form akValue) Global Native
+
+; The form at position aiIndex of akActor's asKey array attribute; None when
+; the index is out of bounds, the slot is empty, or the entry no longer
+; resolves.
+Form Function GetActorArrayAttributeIndex(Actor akActor, String asKey, Int aiIndex) Global Native
+
 ; =============================================================================
 ; Animation registries  (asRegistry is a free-form registry name)
 ; =============================================================================

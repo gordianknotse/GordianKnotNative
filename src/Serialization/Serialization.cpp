@@ -371,6 +371,95 @@ namespace {
                      actorCount, droppedActors);
     }
 
+    // --- ATTA -----------------------------------------------------------------
+
+    void SaveArrayAttributes(const SKSE::SerializationInterface* a_intfc, const AttributeRegistry& a_attributes) {
+        if (!a_intfc->OpenRecord(Record::kArrayAttribute, Version::kArrayAttribute)) {
+            logger::error("Serialization: failed to open ATTA record.");
+            return;
+        }
+
+        const auto& actors = a_attributes.ArrayActors();
+        a_intfc->WriteRecordData(static_cast<std::uint32_t>(actors.size()));
+        for (const auto& [id, attrs] : actors) {
+            a_intfc->WriteRecordData(id);
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(attrs.size()));
+            for (const auto& [key, values] : attrs) {
+                a_intfc->WriteRecordData(static_cast<std::uint32_t>(key.size()));
+                a_intfc->WriteRecordData(key.data(), static_cast<std::uint32_t>(key.size()));
+                a_intfc->WriteRecordData(static_cast<std::uint32_t>(values.size()));
+                for (const auto value : values) {
+                    a_intfc->WriteRecordData(value);
+                }
+            }
+        }
+        logger::info("Serialization: wrote array attributes for {} actor(s).", actors.size());
+    }
+
+    void LoadArrayAttributes(const SKSE::SerializationInterface* a_intfc, std::uint32_t a_version,
+                             AttributeRegistry& a_attributes) {
+        if (a_version > Version::kArrayAttribute) {
+            logger::warn("Serialization: ATTA version {} newer than {}; best-effort load.", a_version,
+                         Version::kArrayAttribute);
+        }
+
+        std::uint32_t actorCount = 0;
+        a_intfc->ReadRecordData(actorCount);
+
+        std::uint32_t loaded = 0;
+        std::uint32_t droppedValues = 0;
+        std::uint32_t droppedActors = 0;
+        for (std::uint32_t i = 0; i < actorCount; ++i) {
+            RE::FormID oldID = 0;
+            a_intfc->ReadRecordData(oldID);
+
+            std::uint32_t attrCount = 0;
+            a_intfc->ReadRecordData(attrCount);
+            AttributeRegistry::ArrayAttributeMap attrs;
+            for (std::uint32_t j = 0; j < attrCount; ++j) {
+                std::uint32_t keyLen = 0;
+                a_intfc->ReadRecordData(keyLen);
+                std::string key(keyLen, '\0');
+                if (keyLen > 0) {
+                    a_intfc->ReadRecordData(key.data(), keyLen);
+                }
+                std::uint32_t valueCount = 0;
+                a_intfc->ReadRecordData(valueCount);
+                std::vector<RE::FormID> values;
+                values.reserve(valueCount);
+                for (std::uint32_t k = 0; k < valueCount; ++k) {
+                    RE::FormID oldValue = 0;
+                    a_intfc->ReadRecordData(oldValue);
+                    // Arrays are POSITIONAL: 0 is a stored None slot, and an entry
+                    // that no longer resolves becomes one (never removed -- indices
+                    // must stay stable). Load order can shift between saves, so
+                    // nonzero FormIDs are remapped.
+                    RE::FormID newValue = 0;
+                    if (oldValue != 0 && !a_intfc->ResolveFormID(oldValue, newValue)) {
+                        ++droppedValues;  // value form deleted or its plugin removed -> None slot
+                        newValue = 0;
+                    }
+                    values.push_back(newValue);
+                }
+                if (!values.empty()) {
+                    attrs[std::move(key)] = std::move(values);
+                }
+            }
+
+            RE::FormID newID = 0;
+            if (!a_intfc->ResolveFormID(oldID, newID)) {
+                ++droppedActors;  // actor deleted or its plugin removed
+                continue;
+            }
+            loaded += static_cast<std::uint32_t>(attrs.size());
+            a_attributes.PutArray(newID, std::move(attrs));
+        }
+        logger::info(
+            "Serialization: loaded {} array attribute(s) across {} actor(s) ({} value(s) zeroed, {} actor(s) "
+            "dropped).",
+            loaded, actorCount, droppedValues, droppedActors);
+    }
+
     // --- callbacks ------------------------------------------------------------
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc) {
@@ -379,6 +468,7 @@ namespace {
         SaveActors(a_intfc, state->Actors());
         SaveAttributes(a_intfc, state->Attributes());
         SaveIntAttributes(a_intfc, state->Attributes());
+        SaveArrayAttributes(a_intfc, state->Attributes());
         SaveQueues(a_intfc, state->Queues());
     }
 
@@ -399,6 +489,9 @@ namespace {
                 break;
             case Record::kIntAttribute:
                 LoadIntAttributes(a_intfc, version, state->Attributes());
+                break;
+            case Record::kArrayAttribute:
+                LoadArrayAttributes(a_intfc, version, state->Attributes());
                 break;
             case Record::kQueue:
                 LoadQueues(a_intfc, version, state->Queues());

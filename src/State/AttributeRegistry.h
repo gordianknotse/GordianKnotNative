@@ -22,6 +22,9 @@ namespace GK {
         using AttributeMap = std::unordered_map<std::string, RE::FormID>;
         // Case-folded attribute key -> int value.
         using IntAttributeMap = std::unordered_map<std::string, std::int32_t>;
+        // Case-folded attribute key -> ordered Form array (as FormIDs; any form
+        // types may mix in one array).
+        using ArrayAttributeMap = std::unordered_map<std::string, std::vector<RE::FormID>>;
 
         // Set a_actor's a_key attribute to a_value. A value of 0 clears the
         // attribute (Papyrus passes None to clear).
@@ -41,14 +44,29 @@ namespace GK {
         // a_actor's a_key int attribute, or a_default if never set / cleared.
         [[nodiscard]] std::int32_t GetInt(RE::FormID a_actor, std::string_view a_key, std::int32_t a_default) const;
 
+        // Set a_actor's a_key array attribute to a_values. An EMPTY array clears
+        // the attribute (there is no empty-vs-unset distinction). A 0 entry is a
+        // real "None" slot -- positions are stable (see SetArrayIndex).
+        void SetArray(RE::FormID a_actor, std::string_view a_key, std::vector<RE::FormID> a_values);
+
+        // Set position a_index of a_actor's a_key array attribute, extending the
+        // array with 0 ("None") slots when a_index is past the end. Creates the
+        // attribute if it doesn't exist yet.
+        void SetArrayIndex(RE::FormID a_actor, std::string_view a_key, std::size_t a_index, RE::FormID a_value);
+
+        // a_actor's a_key array attribute (empty if never set or cleared).
+        [[nodiscard]] const std::vector<RE::FormID>* GetArray(RE::FormID a_actor, std::string_view a_key) const;
+
         // Inserts or overwrites an actor's attributes wholesale (used by
         // serialization load; keys arrive already case-folded from the co-save).
         void Put(RE::FormID a_actor, AttributeMap a_attributes);
         void PutInt(RE::FormID a_actor, IntAttributeMap a_attributes);
+        void PutArray(RE::FormID a_actor, ArrayAttributeMap a_attributes);
 
         void Clear() {
             _attributes.clear();
             _intAttributes.clear();
+            _arrayAttributes.clear();
         }
 
         // Read access to the backing stores (used by serialization). Keys of the
@@ -58,9 +76,13 @@ namespace GK {
         [[nodiscard]] const std::unordered_map<RE::FormID, IntAttributeMap>& IntActors() const {
             return _intAttributes;
         }
+        [[nodiscard]] const std::unordered_map<RE::FormID, ArrayAttributeMap>& ArrayActors() const {
+            return _arrayAttributes;
+        }
 
     private:
         std::unordered_map<RE::FormID, AttributeMap> _attributes;
         std::unordered_map<RE::FormID, IntAttributeMap> _intAttributes;
+        std::unordered_map<RE::FormID, ArrayAttributeMap> _arrayAttributes;
     };
 }

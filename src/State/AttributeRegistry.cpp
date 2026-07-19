@@ -51,6 +51,39 @@ namespace GK {
         return attr != it->second.end() ? attr->second : a_default;
     }
 
+    void AttributeRegistry::SetArray(RE::FormID a_actor, std::string_view a_key, std::vector<RE::FormID> a_values) {
+        if (a_values.empty()) {
+            const auto it = _arrayAttributes.find(a_actor);
+            if (it == _arrayAttributes.end()) {
+                return;
+            }
+            it->second.erase(FoldCase(a_key));
+            if (it->second.empty()) {
+                _arrayAttributes.erase(it);  // keep the invariant: no empty attribute maps stored
+            }
+            return;
+        }
+        _arrayAttributes[a_actor][FoldCase(a_key)] = std::move(a_values);
+    }
+
+    void AttributeRegistry::SetArrayIndex(RE::FormID a_actor, std::string_view a_key, std::size_t a_index,
+                                          RE::FormID a_value) {
+        auto& values = _arrayAttributes[a_actor][FoldCase(a_key)];
+        if (values.size() <= a_index) {
+            values.resize(a_index + 1, 0);  // gap slots read back as None
+        }
+        values[a_index] = a_value;
+    }
+
+    const std::vector<RE::FormID>* AttributeRegistry::GetArray(RE::FormID a_actor, std::string_view a_key) const {
+        const auto it = _arrayAttributes.find(a_actor);
+        if (it == _arrayAttributes.end()) {
+            return nullptr;
+        }
+        const auto attr = it->second.find(FoldCase(a_key));
+        return attr != it->second.end() ? &attr->second : nullptr;
+    }
+
     void AttributeRegistry::Put(RE::FormID a_actor, AttributeMap a_attributes) {
         if (a_attributes.empty()) {
             return;
@@ -63,5 +96,12 @@ namespace GK {
             return;
         }
         _intAttributes[a_actor] = std::move(a_attributes);
+    }
+
+    void AttributeRegistry::PutArray(RE::FormID a_actor, ArrayAttributeMap a_attributes) {
+        if (a_attributes.empty()) {
+            return;
+        }
+        _arrayAttributes[a_actor] = std::move(a_attributes);
     }
 }

@@ -26,7 +26,8 @@ namespace GK::Serialization {
     namespace Record {
         inline constexpr std::uint32_t kActor = FourCC('A', 'C', 'T', 'R');      // Phase 2
         inline constexpr std::uint32_t kAttribute = FourCC('A', 'T', 'T', 'R');     // per-actor keyed attributes
-        inline constexpr std::uint32_t kIntAttribute = FourCC('A', 'T', 'T', 'I');  // per-actor keyed int attributes
+        inline constexpr std::uint32_t kIntAttribute = FourCC('A', 'T', 'T', 'I');    // per-actor keyed int attributes
+        inline constexpr std::uint32_t kArrayAttribute = FourCC('A', 'T', 'T', 'A');  // per-actor keyed Form arrays
         inline constexpr std::uint32_t kQueue = FourCC('Q', 'U', 'E', 'U');      // named actor FIFO queues
         // Phase 5 (reserved): 'NEXT' handle counter, 'LABY', 'CELL', 'MARK',
         //                     'FURN', 'ORPH'.
@@ -46,6 +47,10 @@ namespace GK::Serialization {
         // v1: actorCount, then per actor: actorID, attrCount, then per attribute:
         // keyLen, key bytes (case-folded, no terminator), int32 value.
         inline constexpr std::uint32_t kIntAttribute = 1;
+        // v1: actorCount, then per actor: actorID, attrCount, then per attribute:
+        // keyLen, key bytes (case-folded, no terminator), valueCount, FormIDs in
+        // array order.
+        inline constexpr std::uint32_t kArrayAttribute = 1;
         // v1: queueCount, then per queue: nameLen, name bytes (case-folded, no
         // terminator), entryCount, actor FormIDs front-to-back.
         // v2: appends the delayed enqueues: delayedCount, then per entry: nameLen,
