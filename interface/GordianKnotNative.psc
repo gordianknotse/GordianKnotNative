@@ -388,6 +388,36 @@ Function SetActorArrayAttributeIndex(Actor akActor, String asKey, Int aiIndex, F
 Form Function GetActorArrayAttributeIndex(Actor akActor, String asKey, Int aiIndex) Global Native
 
 ; =============================================================================
+; Armor scans
+; =============================================================================
+
+; Every loaded Armor form bearing akKeyword, optionally filtered to those
+; whose display name CONTAINS asSearchText (case-insensitive, like Papyrus
+; string compares; "" = no name filter, and armors with no display name never
+; match a non-empty search). The result is built natively, so it is NOT
+; subject to the 128-element cap of script-created arrays.
+;
+; The two keyword ARRAYS filter on the Devious Devices RENDERED armor of each
+; candidate: it must bear ALL of akRenderedKeywords AND NONE of
+; akRenderedExcludeKeywords. When either array is non-empty, armors with no
+; rendered device (not a DD inventory device) are excluded. Pass None for an
+; array you don't need; both None = no rendered filtering at all. None
+; entries INSIDE an array are ignored (with a log warning). The rendered
+; lookup goes through DD NG's native database (DeviousDevices.dll, an
+; OPTIONAL runtime dependency resolved on first use) -- the Papyrus VM cannot
+; read script properties off un-instantiated base forms, and DD NG parses
+; them from the plugins instead. Without DeviousDevices.dll the rendered
+; filter matches nothing (a warning lands in the log). E.g.:
+;   Keyword[] req = new Keyword[1]
+;   req[0] = zad_DeviousBelt
+;   Keyword[] excl = new Keyword[1]
+;   excl[0] = zad_BlockGeneric
+;   GetArmorsWithKeyword(zad_InventoryDevice, "", req, excl)
+;     -> every inventory device whose rendered device is a belt and is not
+;        flagged generic-blocked.
+Armor[] Function GetArmorsWithKeyword(Keyword akKeyword, String asSearchText, Keyword[] akRenderedKeywords, Keyword[] akRenderedExcludeKeywords) Global Native
+
+; =============================================================================
 ; Animation registries  (asRegistry is a free-form registry name)
 ; =============================================================================
 ; Named, weighted pools of animation names: any String mints a registry on

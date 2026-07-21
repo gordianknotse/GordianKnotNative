@@ -8,6 +8,8 @@
 
 #include <random>
 
+#include <Windows.h>  // GetModuleHandle/GetProcAddress: DD NG's optional exported API
+
 // =============================================================================
 // Phase 1: actor tracking (roles + status). Resource / labyrinth / orphan
 // functions arrive in later phases (see docs/PLAN-V1.md §9).
@@ -856,6 +858,136 @@ namespace {
         state->Attributes().SetArray(a_actor->GetFormID(), a_key, {});
     }
 
+    // --- armor scans ------------------------------------------------------------
+
+    // Minimal ABI mirror of Devious Devices NG's exported API object (its
+    // include/API.h, DD_APIVERSION 2; the DLL exports a single GetAPI()
+    // returning this). Only the vtable PREFIX we call is declared -- the slot
+    // order must match the real class exactly, which is why GetVersion is
+    // checked before anything else is trusted.
+    struct DDNGApi {
+        virtual std::size_t GetVersion() const = 0;                                        // 00
+        virtual const void* GetDatabase() const = 0;                                       // 01 (unused here)
+        virtual RE::TESObjectARMO* GetDeviceRender(RE::TESObjectARMO* a_invDevice) const = 0;  // 02
+    };
+    constexpr std::size_t kDDNGApiVersion = 2;
+
+    // DD NG's device database, an OPTIONAL runtime dependency resolved lazily.
+    // GetDeviceRender maps a DD inventory device to its rendered armor -- DD NG
+    // parses that out of the plugins' VMAD data, which the Papyrus VM cannot
+    // see for un-instantiated base forms (script instances only exist once an
+    // item is instantiated).
+    RE::TESObjectARMO* DDGetDeviceRender(RE::TESObjectARMO* a_invDevice) {
+        static const auto api = []() -> const DDNGApi* {
+            const auto dd = GetModuleHandleA("DeviousDevices.dll");
+            const auto proc = dd ? GetProcAddress(dd, "GetAPI") : nullptr;
+            if (!proc) {
+                logger::warn("DeviousDevices.dll not loaded (or no GetAPI export); rendered-device filtering "
+                             "will match nothing.");
+                return nullptr;
+            }
+            const auto* result = reinterpret_cast<DDNGApi* (*)()>(proc)();
+            if (!result || result->GetVersion() != kDDNGApiVersion) {
+                logger::warn("DD NG API version {} != expected {}; rendered-device filtering will match nothing.",
+                             result ? result->GetVersion() : 0, kDDNGApiVersion);
+                return nullptr;
+            }
+            logger::info("DD NG API v{} connected.", kDDNGApiVersion);
+            return result;
+        }();
+        return api ? api->GetDeviceRender(a_invDevice) : nullptr;
+    }
+
+    // Comma-separated editor IDs of a_keywords for the log ("<none>" if empty).
+    std::string KeywordListLabel(const std::vector<RE::BGSKeyword*>& a_keywords) {
+        if (a_keywords.empty()) {
+            return "<none>";
+        }
+        std::string out;
+        for (const auto* kw : a_keywords) {
+            if (!out.empty()) {
+                out += ", ";
+            }
+            out += kw ? kw->GetFormEditorID() : "<None>";
+        }
+        return out;
+    }
+
+    // Every loaded Armor form bearing a_keyword, optionally filtered to those
+    // whose display name contains a_searchText (case-insensitive; "" = no name
+    // filter, and nameless armors never match a non-empty search).
+    //
+    // The two keyword arrays filter on the Devious Devices RENDERED armor of
+    // each candidate (looked up through DD NG's database, see
+    // DDGetDeviceRender): the rendered armor must bear ALL of
+    // a_renderedKeywords AND NONE of a_renderedExcludeKeywords. When either
+    // array is non-empty, armors with no rendered device (not a DD inventory
+    // device, or DeviousDevices.dll absent) are excluded. Both arrays empty
+    // (Papyrus None) = no rendered filtering, no DD lookup at all. None
+    // entries INSIDE an array are ignored (a warning is logged -- they usually
+    // mean a typo'd Keyword.GetKeyword).
+    std::vector<RE::TESObjectARMO*> GetArmorsWithKeyword(RE::StaticFunctionTag*, RE::BGSKeyword* a_keyword,
+                                                         std::string_view a_searchText,
+                                                         std::vector<RE::BGSKeyword*> a_renderedKeywords,
+                                                         std::vector<RE::BGSKeyword*> a_renderedExcludeKeywords) {
+        std::vector<RE::TESObjectARMO*> out;
+        logger::info("GetArmorsWithKeyword: keyword='{}' search='{}' rendered=[{}] renderedExclude=[{}].",
+                     a_keyword ? a_keyword->GetFormEditorID() : "<None>", a_searchText,
+                     KeywordListLabel(a_renderedKeywords), KeywordListLabel(a_renderedExcludeKeywords));
+        if (!a_keyword) {
+            logger::warn("GetArmorsWithKeyword: keyword is None (typo in Keyword.GetKeyword?); returning empty.");
+            return out;
+        }
+        const auto dropNones = [](std::vector<RE::BGSKeyword*>& a_list, const char* a_which) {
+            const auto before = a_list.size();
+            std::erase(a_list, nullptr);
+            if (a_list.size() != before) {
+                logger::warn("GetArmorsWithKeyword: {} None entr(ies) in the {} list ignored (typo in "
+                             "Keyword.GetKeyword?).",
+                             before - a_list.size(), a_which);
+            }
+        };
+        dropNones(a_renderedKeywords, "rendered");
+        dropNones(a_renderedExcludeKeywords, "rendered-exclude");
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) {
+            return out;
+        }
+        const std::string foldedSearch = GK::FoldCase(a_searchText);
+        const bool renderedFilter = !a_renderedKeywords.empty() || !a_renderedExcludeKeywords.empty();
+        for (auto* armor : dataHandler->GetFormArray<RE::TESObjectARMO>()) {
+            if (!armor || !armor->HasKeyword(a_keyword)) {
+                continue;
+            }
+            if (!foldedSearch.empty()) {
+                const char* name = armor->GetName();
+                if (!name || GK::FoldCase(name).find(foldedSearch) == std::string::npos) {
+                    continue;
+                }
+            }
+            if (renderedFilter) {
+                auto* rendered = DDGetDeviceRender(armor);
+                if (!rendered) {
+                    continue;  // not a DD inventory device (or DD NG absent)
+                }
+                const bool allRequired = std::ranges::all_of(
+                    a_renderedKeywords, [&](auto* kw) { return rendered->HasKeyword(kw); });
+                const bool anyExcluded = std::ranges::any_of(
+                    a_renderedExcludeKeywords, [&](auto* kw) { return rendered->HasKeyword(kw); });
+                if (!allRequired || anyExcluded) {
+                    continue;
+                }
+                logger::info("GetArmorsWithKeyword: {:08X} '{}' -> rendered {:08X} '{}' MATCH.", armor->GetFormID(),
+                             armor->GetName() ? armor->GetName() : "", rendered->GetFormID(),
+                             rendered->GetName() ? rendered->GetName() : "");
+            }
+            out.push_back(armor);
+        }
+        logger::info("GetArmorsWithKeyword: {} armor(s) matched.", out.size());
+        return out;
+    }
+
     // --- animation registries ---------------------------------------------------
     // Named, weighted pools of animation names: any String mints a registry on
     // first use (names case-insensitive, like Papyrus). SESSION config like the
@@ -1612,6 +1744,7 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("ClearActorArrayAttribute", kClass, ClearActorArrayAttribute);
         a_vm->RegisterFunction("SetActorArrayAttributeIndex", kClass, SetActorArrayAttributeIndex);
         a_vm->RegisterFunction("GetActorArrayAttributeIndex", kClass, GetActorArrayAttributeIndex);
+        a_vm->RegisterFunction("GetArmorsWithKeyword", kClass, GetArmorsWithKeyword);
 
         a_vm->RegisterFunction("AddAnimation", kClass, AddAnimation);
         a_vm->RegisterFunction("GetAnimation", kClass, GetAnimation);
