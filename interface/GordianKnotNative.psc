@@ -400,8 +400,9 @@ Form Function GetActorArrayAttributeIndex(Actor akActor, String asKey, Int aiInd
 ; The two keyword ARRAYS filter on the Devious Devices RENDERED armor of each
 ; candidate: it must bear ALL of akRenderedKeywords AND NONE of
 ; akRenderedExcludeKeywords. When either array is non-empty, armors with no
-; rendered device (not a DD inventory device) are excluded. Pass None for an
-; array you don't need; both None = no rendered filtering at all. None
+; rendered device (not a DD inventory device) are excluded. Omit (or pass
+; None for) an array you don't need; both omitted = no rendered filtering
+; at all. None
 ; entries INSIDE an array are ignored (with a log warning). The rendered
 ; lookup goes through DD NG's native database (DeviousDevices.dll, an
 ; OPTIONAL runtime dependency resolved on first use) -- the Papyrus VM cannot
@@ -415,7 +416,7 @@ Form Function GetActorArrayAttributeIndex(Actor akActor, String asKey, Int aiInd
 ;   GetArmorsWithKeyword(zad_InventoryDevice, "", req, excl)
 ;     -> every inventory device whose rendered device is a belt and is not
 ;        flagged generic-blocked.
-Armor[] Function GetArmorsWithKeyword(Keyword akKeyword, String asSearchText, Keyword[] akRenderedKeywords, Keyword[] akRenderedExcludeKeywords) Global Native
+Armor[] Function GetArmorsWithKeyword(Keyword akKeyword, String asSearchText = "", Keyword[] akRenderedKeywords = None, Keyword[] akRenderedExcludeKeywords = None) Global Native
 
 ; =============================================================================
 ; Animation registries  (asRegistry is a free-form registry name)
