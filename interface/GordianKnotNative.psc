@@ -428,6 +428,14 @@ Armor[] Function GetArmorsWithKeyword(Keyword akKeyword, String asSearchText = "
 ; real for chastity corsets that forgot slot 49.
 Int Function PatchArmorSlotByKeyword(Keyword akKeyword, Int aiSlotNumber) Global Native
 
+; Every loaded Armor bearing akKeyword (the inventory-device filter, like
+; GetArmorsWithKeyword) whose RENDERED device occupies biped slot
+; aiSlotNumber when worn (a non-DD armor's own slots are used), optionally
+; filtered to display names CONTAINING asSearchText (case-insensitive).
+; E.g. GetArmorsWithSlot(zad_InventoryDevice, 49) -> every inventory device
+; that claims the chastity-belt slot when equipped.
+Armor[] Function GetArmorsWithSlot(Keyword akKeyword, Int aiSlotNumber, String asSearchText = "") Global Native
+
 ; =============================================================================
 ; Actor outfits  (asOutfit is a free-form outfit name, case-insensitive)
 ; =============================================================================
@@ -439,8 +447,12 @@ Int Function PatchArmorSlotByKeyword(Keyword akKeyword, Int aiSlotNumber) Global
 ; armors work too. Armor[] surfaces are length 62 and indexed DIRECTLY by
 ; slot number (devices[30] = head; indices 0..29 are always None). Outfits
 ; persist across save/load (devices whose plugin is removed drop out).
-; An outfit name that was never used is DEEMED to exist, all slots empty:
-; adds create it, reads yield None, and converging to it strips the actor.
+; An outfit name that was never used READS as all-empty (reads yield None,
+; adds create it), but existence IS observable: ActorOutfitExists tells a
+; DEFINED outfit (even an empty one -- see CreateEmptyOutfit) from an
+; undefined name, a defined-but-empty actor outfit SHADOWS the same-named
+; template for the convergence functions, and only DeleteActorOutfit
+; un-defines one (emptying an outfit never deletes it).
 ; akActor = None addresses the global TEMPLATE outfits: outfits belonging to
 ; no actor, edited/read with the same functions and stamped onto an actor
 ; with CopyTemplateOutfitToActor. Only NextDeviceToRemove/NextDeviceToAdd
@@ -460,8 +472,22 @@ Bool Function ActorOutfitAddDevice(Actor akActor, String asOutfit, Armor akDevic
 Bool Function ActorOutfitSwapDevice(Actor akActor, String asOutfit, Armor akDevice) Global Native
 
 ; Remove akDevice from every slot holding it (no-op if it is not in the
-; outfit). An outfit whose last device is removed is erased.
+; outfit). Removing the last device leaves a defined-but-EMPTY outfit.
 Function ActorOutfitRemoveDevice(Actor akActor, String asOutfit, Armor akDevice) Global Native
+
+; True when the outfit is DEFINED for akActor (None = the templates) --
+; including defined-but-empty ones. Never creates anything.
+Bool Function ActorOutfitExists(Actor akActor, String asOutfit) Global Native
+
+; Define the outfit as existing and EMPTY when it doesn't exist yet (True =
+; created now). An outfit that already exists is left untouched (False) --
+; use SetOutfitDevices with None to reset one to empty.
+Bool Function CreateEmptyOutfit(Actor akActor, String asOutfit) Global Native
+
+; Un-define the outfit outright (no-op if it doesn't exist). For an actor's
+; outfit this re-exposes the same-named template to the convergence
+; functions.
+Function DeleteActorOutfit(Actor akActor, String asOutfit) Global Native
 
 ; Rebuild asResultOutfit from the input outfits, FULLY replacing it. Inputs
 ; are visited from index 0 up, earlier outfits taking priority: each unique
@@ -470,14 +496,26 @@ Function ActorOutfitRemoveDevice(Actor akActor, String asOutfit, Armor akDevice)
 ; otherwise that device is skipped entirely (never partially placed).
 ; Unknown input outfits are deemed empty. asResultOutfit may itself be
 ; listed among the inputs (its OLD content is read before being replaced).
-; A merge that yields no devices erases the result outfit.
+; The result outfit is DEFINED afterwards, even when the merge yields no
+; devices.
 Function ActorOutfitMerge(Actor akActor, String[] asInputOutfits, String asResultOutfit) Global Native
 
 ; Copy the TEMPLATE outfit asSourceOutfit onto akTargetActor as
-; asTargetOutfit, FULLY replacing it. An unknown or empty template erases
-; the target outfit. akTargetActor = None copies template-to-template
-; (duplicate/rename a template).
+; asTargetOutfit, FULLY replacing it; the target is DEFINED afterwards, even
+; when the source template is unknown or empty (target becomes an empty
+; outfit). akTargetActor = None copies template-to-template (duplicate/
+; rename a template).
 Function CopyTemplateOutfitToActor(Actor akTargetActor, String asSourceOutfit, String asTargetOutfit) Global Native
+
+; The human-readable name of a biped slot ("head" for 30, "body" for 32,
+; "pelvis primary" for 49, ...; CK/community names -- 44+ are conventions).
+; "" for anything outside 30..61. Same table LogActorOutfit prints.
+String Function GetSlotName(Int aiSlotNumber) Global Native
+
+; Devious Devices' slot-usage name for a biped slot -- "Chastity Belt" for
+; 49, "Gags" for 44, "Harnesses / Corsets" for 58, ... "" for slots DD
+; assigns no meaning to (54, 60, 61) and anything outside 30..61.
+String Function GetDDSlotName(Int aiSlotNumber) Global Native
 
 ; Dump the outfit's occupied slots to SKSE/GordianKnot.log, one line per
 ; filled slot: slot number, slot name (head/body/...), armor name and
@@ -493,7 +531,7 @@ Armor[] Function GetOutfitDevices(Actor akActor, String asOutfit) Global Native
 ; Wholesale write, taking the SAME slot-indexed format GetOutfitDevices
 ; returns. Slots are stored exactly as given (no mask computation); entries
 ; below index 30 are ignored, a shorter array leaves the tail empty, and an
-; all-None array erases the outfit.
+; all-None array leaves a defined-but-EMPTY outfit.
 Function SetOutfitDevices(Actor akActor, String asOutfit, Armor[] akDevices) Global Native
 
 ; The device in ONE slot (standard biped slot number, 30..61); None for an
@@ -505,16 +543,19 @@ Armor Function GetOutfitDevice(Actor akActor, String asOutfit, Int aiSlotNumber)
 ; slot (comparison is against the outfit device's rendered armor, since that
 ; is what is actually worn). For a DD device the INVENTORY device is returned
 ; (what removal APIs want), else the worn armor itself. None = nothing left
-; to remove. Loop: remove what it returns, call again, until None. NOTE an
-; unknown outfit is deemed all-empty, so converging to it removes EVERYTHING
-; the actor wears -- watch your outfit-name spelling.
+; to remove. Loop: remove what it returns, call again, until None. When the
+; actor has no outfit of that name, the same-named TEMPLATE outfit is used
+; instead -- actors inherit the defaults until an outfit is customized for
+; them. NOTE if NEITHER exists the outfit is deemed all-empty, so converging
+; removes EVERYTHING the actor wears -- watch your outfit-name spelling.
 Armor Function NextDeviceToRemove(Actor akActor, String asOutfit) Global Native
 
 ; Convergence, ADD phase (run AFTER the removal loop returns None): scanning
 ; slots 30..61 in order, returns the first outfit INVENTORY device whose slot
 ; akActor currently wears nothing in; slots the actor wears anything in are
 ; skipped. None = nothing left to add. Loop: equip what it returns, call
-; again, until None.
+; again, until None. When the actor has no outfit of that name, the
+; same-named TEMPLATE outfit is used instead (see NextDeviceToRemove).
 Armor Function NextDeviceToAdd(Actor akActor, String asOutfit) Global Native
 
 ; =============================================================================

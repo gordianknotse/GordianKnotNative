@@ -18,20 +18,14 @@ namespace GK {
         return _outfits[a_actor][FoldCase(a_name)];  // value-initialized: all slots 0
     }
 
-    void OutfitRegistry::PruneIfEmpty(RE::FormID a_actor, std::string_view a_name) {
+    void OutfitRegistry::Erase(RE::FormID a_actor, std::string_view a_name) {
         const auto it = _outfits.find(a_actor);
         if (it == _outfits.end()) {
             return;
         }
-        const auto key = FoldCase(a_name);
-        const auto outfit = it->second.find(key);
-        if (outfit == it->second.end() ||
-            !std::ranges::all_of(outfit->second, [](RE::FormID a_id) { return a_id == 0; })) {
-            return;
-        }
-        it->second.erase(outfit);
+        it->second.erase(FoldCase(a_name));
         if (it->second.empty()) {
-            _outfits.erase(it);  // keep the invariant: no empty outfit maps stored
+            _outfits.erase(it);  // keep the invariant: no empty actor maps stored
         }
     }
 

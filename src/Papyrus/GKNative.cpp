@@ -1067,6 +1067,44 @@ namespace {
         return form ? form->As<RE::TESObjectARMO>() : nullptr;
     }
 
+    // Every loaded Armor bearing a_keyword (the inventory-device filter, like
+    // GetArmorsWithKeyword) whose RENDERED device occupies biped slot a_slot
+    // when worn (a non-DD armor's own slots are used; see DeviceSlotMask),
+    // optionally filtered to display names containing a_searchText
+    // (case-insensitive; "" = no name filter).
+    std::vector<RE::TESObjectARMO*> GetArmorsWithSlot(RE::StaticFunctionTag*, RE::BGSKeyword* a_keyword,
+                                                      std::int32_t a_slot, std::string_view a_searchText) {
+        std::vector<RE::TESObjectARMO*> out;
+        logger::info("GetArmorsWithSlot: keyword='{}' slot={} search='{}'.",
+                     a_keyword ? a_keyword->GetFormEditorID() : "<None>", a_slot, a_searchText);
+        if (!a_keyword || a_slot < static_cast<std::int32_t>(GK::kBipedSlotFirst) ||
+            a_slot > static_cast<std::int32_t>(GK::kBipedSlotLast)) {
+            logger::warn("GetArmorsWithSlot: None keyword or slot outside 30..61; returning empty.");
+            return out;
+        }
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) {
+            return out;
+        }
+        const std::string foldedSearch = GK::FoldCase(a_searchText);
+        for (auto* armor : dataHandler->GetFormArray<RE::TESObjectARMO>()) {
+            if (!armor || !armor->HasKeyword(a_keyword)) {
+                continue;
+            }
+            if (!foldedSearch.empty()) {
+                const char* name = armor->GetName();
+                if (!name || GK::FoldCase(name).find(foldedSearch) == std::string::npos) {
+                    continue;
+                }
+            }
+            if (MaskHasSlot(DeviceSlotMask(armor), static_cast<std::size_t>(a_slot))) {
+                out.push_back(armor);
+            }
+        }
+        logger::info("GetArmorsWithSlot: {} armor(s) matched.", out.size());
+        return out;
+    }
+
     // Add a_device to the outfit: false (no change) if any slot the device
     // occupies is already taken in the outfit -- or on bad arguments / a device
     // occupying no slots at all. Creates the outfit on first use.
@@ -1152,7 +1190,8 @@ namespace {
                 (*slots)[slot] = 0;
             }
         }
-        state->Outfits().PruneIfEmpty(ownerID, a_outfit);
+        // Removing the last device leaves an existing-but-EMPTY outfit; only
+        // DeleteActorOutfit removes one.
     }
 
     // Rebuild a_result from a_inputs, FULLY replacing it. Inputs are visited
@@ -1214,8 +1253,7 @@ namespace {
             }
         }
 
-        state->Outfits().GetOrCreate(actorID, a_result) = result;
-        state->Outfits().PruneIfEmpty(actorID, a_result);
+        state->Outfits().GetOrCreate(actorID, a_result) = result;  // result EXISTS afterwards, even if empty
     }
 
     // Community/CK names for the biped slots (indexed by slot - 30).
@@ -1253,6 +1291,63 @@ namespace {
         "misc 60",          // 60
         "FX01",             // 61
     };
+
+    // Devious Devices' slot-usage names (from the DD device construction kit /
+    // MCM), indexed by slot - 30. "" for slots DD assigns no meaning to.
+    constexpr std::array<const char*, GK::kOutfitSlotCount - GK::kBipedSlotFirst> kDDSlotNames{
+        "Head",                        // 30
+        "Hair",                        // 31
+        "Body - Full",                 // 32
+        "Hands",                       // 33
+        "Forearms",                    // 34
+        "Amulet",                      // 35
+        "Ring",                        // 36
+        "Feet",                        // 37
+        "Calves",                      // 38
+        "Shield",                      // 39
+        "Tail",                        // 40
+        "Device Hider + Long Hair",    // 41
+        "Circlet",                     // 42
+        "Ears",                        // 43
+        "Gags",                        // 44
+        "Collar",                      // 45
+        "HeavyBondage",                // 46
+        "Backpacks",                   // 47
+        "Plugs (Anal)",                // 48
+        "Chastity Belt",               // 49
+        "Vag. Piercings",              // 50
+        "Nipple Piercings",            // 51
+        "SoS",                         // 52
+        "Cuffs (Legs)",                // 53
+        "",                            // 54 (no DD meaning)
+        "Blindfold",                   // 55
+        "Chastity Bra",                // 56
+        "Plug Vaginal",                // 57
+        "Harnesses / Corsets",         // 58
+        "ArmCuff / Armbinder",          // 59
+        "",                            // 60 (no DD meaning)
+        "",                            // 61 (no DD meaning)
+    };
+
+    // Devious Devices' name for a biped slot ("Chastity Belt" for 49, ...); ""
+    // for slots DD assigns no meaning to and anything outside 30..61.
+    std::string GetDDSlotName(RE::StaticFunctionTag*, std::int32_t a_slot) {
+        if (a_slot < static_cast<std::int32_t>(GK::kBipedSlotFirst) ||
+            a_slot > static_cast<std::int32_t>(GK::kBipedSlotLast)) {
+            return {};
+        }
+        return kDDSlotNames[static_cast<std::size_t>(a_slot) - GK::kBipedSlotFirst];
+    }
+
+    // The human-readable name of a biped slot (same table LogActorOutfit
+    // prints); "" for anything outside 30..61.
+    std::string GetSlotName(RE::StaticFunctionTag*, std::int32_t a_slot) {
+        if (a_slot < static_cast<std::int32_t>(GK::kBipedSlotFirst) ||
+            a_slot > static_cast<std::int32_t>(GK::kBipedSlotLast)) {
+            return {};
+        }
+        return kBipedSlotNames[static_cast<std::size_t>(a_slot) - GK::kBipedSlotFirst];
+    }
 
     // Dump the outfit's occupied slots to GordianKnot.log (empty slots are not
     // logged; an empty/unknown outfit logs a single "(empty)" line).
@@ -1326,7 +1421,8 @@ namespace {
         for (std::size_t slot = GK::kBipedSlotFirst; slot <= GK::kBipedSlotLast && slot < a_devices.size(); ++slot) {
             slots[slot] = a_devices[slot] ? a_devices[slot]->GetFormID() : 0;
         }
-        state->Outfits().PruneIfEmpty(ownerID, a_outfit);
+        // An all-None write leaves an existing-but-EMPTY outfit (defined, no
+        // devices); only DeleteActorOutfit removes one.
     }
 
     // The device in ONE slot (standard biped slot number, 30..61); None for an
@@ -1343,6 +1439,46 @@ namespace {
         return slots ? AsArmor((*slots)[static_cast<std::size_t>(a_slot)]) : nullptr;
     }
 
+    // True when the outfit is DEFINED for the actor (None = template
+    // namespace) -- including defined-but-empty ones. Reads never create.
+    bool ActorOutfitExists(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_outfit) {
+        if (a_outfit.empty()) {
+            return false;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        return state->Outfits().Find(OutfitOwnerID(a_actor), a_outfit) != nullptr;
+    }
+
+    // Define the outfit as existing and EMPTY when it doesn't exist yet (true
+    // = created now). An outfit that already exists is left untouched (false)
+    // -- use SetOutfitDevices with None to reset one to empty.
+    bool CreateEmptyOutfit(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_outfit) {
+        if (a_outfit.empty()) {
+            return false;
+        }
+        const auto ownerID = OutfitOwnerID(a_actor);
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        if (state->Outfits().Find(ownerID, a_outfit)) {
+            return false;
+        }
+        static_cast<void>(state->Outfits().GetOrCreate(ownerID, a_outfit));  // creation is the side effect we want
+        return true;
+    }
+
+    // Un-define the outfit outright (no-op if it doesn't exist). For an
+    // actor's outfit this re-exposes the same-named template to the
+    // convergence functions.
+    void DeleteActorOutfit(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_outfit) {
+        if (a_outfit.empty()) {
+            return;
+        }
+        auto* state = GK::GameState::GetSingleton();
+        auto lock = state->Lock();
+        state->Outfits().Erase(OutfitOwnerID(a_actor), a_outfit);
+    }
+
     // Copy the TEMPLATE outfit a_source onto a_targetActor as a_target, fully
     // replacing it. An unknown/empty template erases the target outfit. A None
     // target actor copies template-to-template (rename/duplicate).
@@ -1356,8 +1492,17 @@ namespace {
         auto lock = state->Lock();
         const auto* source = state->Outfits().Find(0, a_source);  // 0 = template namespace
         const GK::OutfitRegistry::Slots copy = source ? *source : GK::OutfitRegistry::Slots{};
-        state->Outfits().GetOrCreate(targetID, a_target) = copy;
-        state->Outfits().PruneIfEmpty(targetID, a_target);
+        state->Outfits().GetOrCreate(targetID, a_target) = copy;  // target EXISTS afterwards, even if empty
+    }
+
+    // The outfit the CONVERGENCE functions aim for: the actor's own outfit
+    // when it exists, else the TEMPLATE of the same name -- actors inherit
+    // the defaults until an outfit is customized for them -- else nullptr
+    // (deemed all-empty).
+    [[nodiscard]] const GK::OutfitRegistry::Slots* FindOutfitOrTemplate(GK::GameState& a_state, RE::FormID a_actor,
+                                                                        std::string_view a_outfit) {
+        const auto* slots = a_state.Outfits().Find(a_actor, a_outfit);
+        return slots ? slots : a_state.Outfits().Find(0, a_outfit);
     }
 
     // Convergence, removal phase: scanning slots 30..61 in order, the first
@@ -1365,9 +1510,10 @@ namespace {
     // outfit device is compared via its RENDERED armor, since that is what is
     // actually worn). Returns the worn armor's INVENTORY device when it is a
     // DD rendered device (that is what removal APIs want), else the worn armor
-    // itself; None when nothing is left to remove. An unknown outfit is
-    // deemed to exist all-EMPTY (like everywhere in this section), so
-    // converging to it removes everything worn.
+    // itself; None when nothing is left to remove. Aims for the actor's outfit,
+    // falling back to the same-named TEMPLATE (see FindOutfitOrTemplate); when
+    // neither exists the outfit is deemed all-EMPTY, so converging removes
+    // everything worn.
     RE::TESObjectARMO* NextDeviceToRemove(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_outfit) {
         if (!a_actor || a_outfit.empty()) {
             return nullptr;
@@ -1375,7 +1521,7 @@ namespace {
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
         static constexpr GK::OutfitRegistry::Slots kEmptySlots{};
-        const auto* found = state->Outfits().Find(a_actor->GetFormID(), a_outfit);
+        const auto* found = FindOutfitOrTemplate(*state, a_actor->GetFormID(), a_outfit);
         const auto* slots = found ? found : &kEmptySlots;
         for (std::size_t slot = GK::kBipedSlotFirst; slot <= GK::kBipedSlotLast; ++slot) {
             auto* worn = a_actor->GetWornArmor(
@@ -1397,15 +1543,16 @@ namespace {
     // Convergence, add phase (run after the removal loop returns None):
     // scanning slots 30..61 in order, the first outfit device whose slot the
     // actor currently wears NOTHING in; None when nothing is left to add.
-    // Returns the INVENTORY device exactly as stored. An unknown outfit is
-    // deemed to exist all-empty (nothing to add).
+    // Returns the INVENTORY device exactly as stored. Aims for the actor's
+    // outfit, falling back to the same-named TEMPLATE (see
+    // FindOutfitOrTemplate); with neither there is nothing to add.
     RE::TESObjectARMO* NextDeviceToAdd(RE::StaticFunctionTag*, RE::Actor* a_actor, std::string_view a_outfit) {
         if (!a_actor || a_outfit.empty()) {
             return nullptr;
         }
         auto* state = GK::GameState::GetSingleton();
         auto lock = state->Lock();
-        const auto* slots = state->Outfits().Find(a_actor->GetFormID(), a_outfit);
+        const auto* slots = FindOutfitOrTemplate(*state, a_actor->GetFormID(), a_outfit);
         if (!slots) {
             return nullptr;  // deemed empty: an empty outfit has nothing to add
         }
@@ -2182,12 +2329,18 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("GetActorArrayAttributeIndex", kClass, GetActorArrayAttributeIndex);
         a_vm->RegisterFunction("GetArmorsWithKeyword", kClass, GetArmorsWithKeyword);
         a_vm->RegisterFunction("PatchArmorSlotByKeyword", kClass, PatchArmorSlotByKeyword);
+        a_vm->RegisterFunction("GetArmorsWithSlot", kClass, GetArmorsWithSlot);
         a_vm->RegisterFunction("ActorOutfitAddDevice", kClass, ActorOutfitAddDevice);
         a_vm->RegisterFunction("ActorOutfitSwapDevice", kClass, ActorOutfitSwapDevice);
         a_vm->RegisterFunction("ActorOutfitRemoveDevice", kClass, ActorOutfitRemoveDevice);
         a_vm->RegisterFunction("ActorOutfitMerge", kClass, ActorOutfitMerge);
         a_vm->RegisterFunction("CopyTemplateOutfitToActor", kClass, CopyTemplateOutfitToActor);
+        a_vm->RegisterFunction("ActorOutfitExists", kClass, ActorOutfitExists);
+        a_vm->RegisterFunction("CreateEmptyOutfit", kClass, CreateEmptyOutfit);
+        a_vm->RegisterFunction("DeleteActorOutfit", kClass, DeleteActorOutfit);
         a_vm->RegisterFunction("LogActorOutfit", kClass, LogActorOutfit);
+        a_vm->RegisterFunction("GetSlotName", kClass, GetSlotName);
+        a_vm->RegisterFunction("GetDDSlotName", kClass, GetDDSlotName);
         a_vm->RegisterFunction("GetOutfitDevices", kClass, GetOutfitDevices);
         a_vm->RegisterFunction("SetOutfitDevices", kClass, SetOutfitDevices);
         a_vm->RegisterFunction("GetOutfitDevice", kClass, GetOutfitDevice);

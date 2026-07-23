@@ -522,7 +522,6 @@ namespace {
                 std::uint32_t entries = 0;
                 a_intfc->ReadRecordData(entries);
                 GK::OutfitRegistry::Slots slots{};
-                bool any = false;
                 for (std::uint32_t k = 0; k < entries; ++k) {
                     std::uint32_t slot = 0;
                     RE::FormID oldDevice = 0;
@@ -533,14 +532,13 @@ namespace {
                     if (slot >= GK::kBipedSlotFirst && slot <= GK::kBipedSlotLast && oldDevice != 0 &&
                         a_intfc->ResolveFormID(oldDevice, newDevice)) {
                         slots[slot] = newDevice;
-                        any = true;
                     } else {
                         ++droppedDevices;  // device's plugin removed (its slots go empty)
                     }
                 }
-                if (any) {
-                    outfits[std::move(name)] = slots;  // fully-dropped outfits evaporate
-                }
+                // Defined-but-empty outfits are kept: existence is meaningful
+                // (ActorOutfitExists, template shadowing).
+                outfits[std::move(name)] = slots;
             }
 
             // Actor 0 is the TEMPLATE namespace (no form to resolve); real actors

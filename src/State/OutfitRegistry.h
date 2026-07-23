@@ -34,10 +34,11 @@ namespace GK {
         // The named outfit's slots, default-created (all empty) if absent.
         [[nodiscard]] Slots& GetOrCreate(RE::FormID a_actor, std::string_view a_name);
 
-        // Erase the outfit when every slot is empty (keeps the invariant: no
-        // all-empty outfits stored, so one-shot names don't accumulate). Call
-        // after any mutation that clears slots.
-        void PruneIfEmpty(RE::FormID a_actor, std::string_view a_name);
+        // Erase the outfit outright (no-op if absent). All-EMPTY outfits are
+        // otherwise kept: an existing-but-empty outfit is meaningful (it
+        // shadows the same-named template and reads as defined), so only an
+        // explicit delete removes one.
+        void Erase(RE::FormID a_actor, std::string_view a_name);
 
         // Inserts or overwrites an actor's outfits wholesale (used by
         // serialization load; names arrive already case-folded from the co-save).
