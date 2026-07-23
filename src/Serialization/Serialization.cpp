@@ -460,6 +460,103 @@ namespace {
             loaded, actorCount, droppedValues, droppedActors);
     }
 
+    // --- OUTF -----------------------------------------------------------------
+
+    void SaveOutfits(const SKSE::SerializationInterface* a_intfc, const GK::OutfitRegistry& a_outfits) {
+        if (!a_intfc->OpenRecord(Record::kOutfit, Version::kOutfit)) {
+            logger::error("Serialization: failed to open OUTF record.");
+            return;
+        }
+
+        const auto& actors = a_outfits.Actors();
+        a_intfc->WriteRecordData(static_cast<std::uint32_t>(actors.size()));
+        for (const auto& [id, outfits] : actors) {
+            a_intfc->WriteRecordData(id);
+            a_intfc->WriteRecordData(static_cast<std::uint32_t>(outfits.size()));
+            for (const auto& [name, slots] : outfits) {
+                a_intfc->WriteRecordData(static_cast<std::uint32_t>(name.size()));
+                a_intfc->WriteRecordData(name.data(), static_cast<std::uint32_t>(name.size()));
+                std::uint32_t entries = 0;
+                for (std::size_t slot = GK::kBipedSlotFirst; slot <= GK::kBipedSlotLast; ++slot) {
+                    entries += slots[slot] != 0;
+                }
+                a_intfc->WriteRecordData(entries);
+                for (std::size_t slot = GK::kBipedSlotFirst; slot <= GK::kBipedSlotLast; ++slot) {
+                    if (slots[slot] != 0) {
+                        a_intfc->WriteRecordData(static_cast<std::uint32_t>(slot));
+                        a_intfc->WriteRecordData(slots[slot]);
+                    }
+                }
+            }
+        }
+        logger::info("Serialization: wrote outfits for {} actor(s).", actors.size());
+    }
+
+    void LoadOutfits(const SKSE::SerializationInterface* a_intfc, std::uint32_t a_version,
+                     GK::OutfitRegistry& a_outfits) {
+        if (a_version > Version::kOutfit) {
+            logger::warn("Serialization: OUTF version {} newer than {}; best-effort load.", a_version,
+                         Version::kOutfit);
+        }
+
+        std::uint32_t actorCount = 0;
+        a_intfc->ReadRecordData(actorCount);
+
+        std::uint32_t loaded = 0;
+        std::uint32_t droppedDevices = 0;
+        std::uint32_t droppedActors = 0;
+        for (std::uint32_t i = 0; i < actorCount; ++i) {
+            RE::FormID oldID = 0;
+            a_intfc->ReadRecordData(oldID);
+
+            std::uint32_t outfitCount = 0;
+            a_intfc->ReadRecordData(outfitCount);
+            GK::OutfitRegistry::OutfitMap outfits;
+            for (std::uint32_t j = 0; j < outfitCount; ++j) {
+                std::uint32_t nameLen = 0;
+                a_intfc->ReadRecordData(nameLen);
+                std::string name(nameLen, '\0');
+                if (nameLen > 0) {
+                    a_intfc->ReadRecordData(name.data(), nameLen);
+                }
+                std::uint32_t entries = 0;
+                a_intfc->ReadRecordData(entries);
+                GK::OutfitRegistry::Slots slots{};
+                bool any = false;
+                for (std::uint32_t k = 0; k < entries; ++k) {
+                    std::uint32_t slot = 0;
+                    RE::FormID oldDevice = 0;
+                    a_intfc->ReadRecordData(slot);
+                    a_intfc->ReadRecordData(oldDevice);
+                    // Load order can shift between saves — remap the stored FormID.
+                    RE::FormID newDevice = 0;
+                    if (slot >= GK::kBipedSlotFirst && slot <= GK::kBipedSlotLast && oldDevice != 0 &&
+                        a_intfc->ResolveFormID(oldDevice, newDevice)) {
+                        slots[slot] = newDevice;
+                        any = true;
+                    } else {
+                        ++droppedDevices;  // device's plugin removed (its slots go empty)
+                    }
+                }
+                if (any) {
+                    outfits[std::move(name)] = slots;  // fully-dropped outfits evaporate
+                }
+            }
+
+            // Actor 0 is the TEMPLATE namespace (no form to resolve); real actors
+            // are remapped, and dropped with their outfits if they no longer exist.
+            RE::FormID newID = 0;
+            if (oldID != 0 && !a_intfc->ResolveFormID(oldID, newID)) {
+                ++droppedActors;  // actor deleted or its plugin removed
+                continue;
+            }
+            loaded += static_cast<std::uint32_t>(outfits.size());
+            a_outfits.Put(newID, std::move(outfits));
+        }
+        logger::info("Serialization: loaded {} outfit(s) across {} actor(s) ({} device(s), {} actor(s) dropped).",
+                     loaded, actorCount, droppedDevices, droppedActors);
+    }
+
     // --- callbacks ------------------------------------------------------------
 
     void SaveCallback(SKSE::SerializationInterface* a_intfc) {
@@ -469,6 +566,7 @@ namespace {
         SaveAttributes(a_intfc, state->Attributes());
         SaveIntAttributes(a_intfc, state->Attributes());
         SaveArrayAttributes(a_intfc, state->Attributes());
+        SaveOutfits(a_intfc, state->Outfits());
         SaveQueues(a_intfc, state->Queues());
     }
 
@@ -492,6 +590,9 @@ namespace {
                 break;
             case Record::kArrayAttribute:
                 LoadArrayAttributes(a_intfc, version, state->Attributes());
+                break;
+            case Record::kOutfit:
+                LoadOutfits(a_intfc, version, state->Outfits());
                 break;
             case Record::kQueue:
                 LoadQueues(a_intfc, version, state->Queues());

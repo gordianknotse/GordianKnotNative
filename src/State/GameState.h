@@ -4,6 +4,7 @@
 #include "State/AnimationRegistry.h"
 #include "State/AttributeRegistry.h"
 #include "State/Labyrinth.h"
+#include "State/OutfitRegistry.h"
 #include "State/QueueRegistry.h"
 #include "State/ResourceRegistry.h"
 
@@ -36,6 +37,7 @@ namespace GK {
         [[nodiscard]] AnimationRegistry& Animations() { return _animations; }
         [[nodiscard]] AttributeRegistry& Attributes() { return _attributes; }
         [[nodiscard]] LabyrinthRegistry& Labyrinths() { return _labyrinths; }
+        [[nodiscard]] OutfitRegistry& Outfits() { return _outfits; }
         [[nodiscard]] QueueRegistry& Queues() { return _queues; }
         [[nodiscard]] ResourceRegistry& Resources() { return _resources; }
         [[nodiscard]] ResourceKeywords& Keywords() { return _keywords; }
@@ -77,6 +79,7 @@ namespace GK {
         AnimationRegistry _animations;
         AttributeRegistry _attributes;
         LabyrinthRegistry _labyrinths;
+        OutfitRegistry _outfits;
         QueueRegistry _queues;
         ResourceRegistry _resources;
         ResourceKeywords _keywords;

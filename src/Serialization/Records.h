@@ -28,7 +28,8 @@ namespace GK::Serialization {
         inline constexpr std::uint32_t kAttribute = FourCC('A', 'T', 'T', 'R');     // per-actor keyed attributes
         inline constexpr std::uint32_t kIntAttribute = FourCC('A', 'T', 'T', 'I');    // per-actor keyed int attributes
         inline constexpr std::uint32_t kArrayAttribute = FourCC('A', 'T', 'T', 'A');  // per-actor keyed Form arrays
-        inline constexpr std::uint32_t kQueue = FourCC('Q', 'U', 'E', 'U');      // named actor FIFO queues
+        inline constexpr std::uint32_t kQueue = FourCC('Q', 'U', 'E', 'U');       // named actor FIFO queues
+        inline constexpr std::uint32_t kOutfit = FourCC('O', 'U', 'T', 'F');      // per-actor named outfits
         // Phase 5 (reserved): 'NEXT' handle counter, 'LABY', 'CELL', 'MARK',
         //                     'FURN', 'ORPH'.
     }
@@ -57,5 +58,9 @@ namespace GK::Serialization {
         // name bytes (case-folded), actor FormID, remaining seconds (double --
         // rebased onto the session clock at load). v1 saves load with none.
         inline constexpr std::uint32_t kQueue = 2;
+        // v1: actorCount, then per actor: actorID, outfitCount, then per outfit:
+        // nameLen, name bytes (case-folded, no terminator), entryCount, then per
+        // entry: slot number (u32, 30..61), device FormID.
+        inline constexpr std::uint32_t kOutfit = 1;
     }
 }

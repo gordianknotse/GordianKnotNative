@@ -11,6 +11,7 @@ namespace GK {
         _actors.Clear();
         _attributes.Clear();
         _labyrinths.Clear();
+        _outfits.Clear();
         _queues.Clear();
         _resources.Clear();
         _aliasReservations.clear();

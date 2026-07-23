@@ -54,6 +54,7 @@ set(SOURCES
     src/State/FlagFilter.cpp
     src/State/GameState.cpp
     src/State/Labyrinth.cpp
+    src/State/OutfitRegistry.cpp
     src/State/QueueRegistry.cpp
     src/State/RoleFactions.cpp
     src/Papyrus/GKNative.cpp
@@ -80,6 +81,7 @@ set(SOURCES
     src/State/Furniture.h
     src/State/ResourceRegistry.h
     src/State/Labyrinth.h
+    src/State/OutfitRegistry.h
     src/State/QueueRegistry.h
     src/State/RoleFactions.h
     src/Papyrus/GKNative.h
