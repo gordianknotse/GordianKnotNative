@@ -494,10 +494,13 @@ Function DeleteActorOutfit(Actor akActor, String asOutfit) Global Native
 ; device of an input is copied with ALL the slots it holds in that input --
 ; but only when every one of those slots is still free in the result;
 ; otherwise that device is skipped entirely (never partially placed).
-; Unknown input outfits are deemed empty. asResultOutfit may itself be
-; listed among the inputs (its OLD content is read before being replaced).
-; The result outfit is DEFINED afterwards, even when the merge yields no
-; devices.
+; Each input resolves like the convergence functions do: the actor's own
+; outfit when it exists (a defined-but-empty one shadows), else the
+; same-named TEMPLATE, else it contributes nothing. asResultOutfit may
+; itself be listed among the inputs (its OLD content is read before being
+; replaced). The result outfit is DEFINED afterwards -- written to akActor's
+; own outfits, never the templates (unless akActor is None) -- even when the
+; merge yields no devices.
 Function ActorOutfitMerge(Actor akActor, String[] asInputOutfits, String asResultOutfit) Global Native
 
 ; Copy the TEMPLATE outfit asSourceOutfit onto akTargetActor as
@@ -512,10 +515,19 @@ Function CopyTemplateOutfitToActor(Actor akTargetActor, String asSourceOutfit, S
 ; "" for anything outside 30..61. Same table LogActorOutfit prints.
 String Function GetSlotName(Int aiSlotNumber) Global Native
 
-; Devious Devices' slot-usage name for a biped slot -- "Chastity Belt" for
-; 49, "Gags" for 44, "Harnesses / Corsets" for 58, ... "" for slots DD
+; Devious Devices' slot-usage name for a biped slot, UPCASED for direct menu
+; display -- "CHASTITY BELT" for 49, "GAGS" for 44, ... "" for slots DD
 ; assigns no meaning to (54, 60, 61) and anything outside 30..61.
 String Function GetDDSlotName(Int aiSlotNumber) Global Native
+
+; ASCII-uppercased copy of asText (non-ASCII characters pass through).
+String Function UpCase(String asText) Global Native
+
+; asText upcased and framed as a menu section header: rails of asRailChar
+; (its first character; "=" when empty) sized so the result approaches
+; aiWidth characters ("== HARNESS / CORSET =="). Names at or beyond aiWidth
+; get no rails, just the upcased text.
+String Function MakeHeader(String asText, Int aiWidth = 20, String asRailChar = "=") Global Native
 
 ; Dump the outfit's occupied slots to SKSE/GordianKnot.log, one line per
 ; filled slot: slot number, slot name (head/body/...), armor name and

@@ -1052,6 +1052,17 @@ namespace {
     // The registry key a_actor addresses (0 = the template namespace).
     [[nodiscard]] RE::FormID OutfitOwnerID(RE::Actor* a_actor) { return a_actor ? a_actor->GetFormID() : 0; }
 
+    // The EFFECTIVE outfit for reading: the owner's own outfit when it exists
+    // (a defined-but-empty one shadows), else the TEMPLATE of the same name --
+    // actors inherit the defaults until an outfit is customized for them --
+    // else nullptr (deemed all-empty). Used by the convergence functions and
+    // by ActorOutfitMerge's inputs; a template owner just resolves twice.
+    [[nodiscard]] const GK::OutfitRegistry::Slots* FindOutfitOrTemplate(GK::GameState& a_state, RE::FormID a_actor,
+                                                                        std::string_view a_outfit) {
+        const auto* slots = a_state.Outfits().Find(a_actor, a_outfit);
+        return slots ? slots : a_state.Outfits().Find(0, a_outfit);
+    }
+
     // The biped-slot mask the device occupies when worn.
     [[nodiscard]] std::uint32_t DeviceSlotMask(RE::TESObjectARMO* a_invDevice) {
         auto* rendered = DDGetDeviceRender(a_invDevice);
@@ -1217,9 +1228,9 @@ namespace {
             if (name.empty()) {
                 continue;
             }
-            const auto* in = state->Outfits().Find(actorID, name);
+            const auto* in = FindOutfitOrTemplate(*state, actorID, name);
             if (!in) {
-                continue;  // deemed empty: contributes nothing
+                continue;  // neither own nor template: contributes nothing
             }
             for (std::size_t slot = GK::kBipedSlotFirst; slot <= GK::kBipedSlotLast; ++slot) {
                 const auto id = (*in)[slot];
@@ -1329,14 +1340,46 @@ namespace {
         "",                            // 61 (no DD meaning)
     };
 
-    // Devious Devices' name for a biped slot ("Chastity Belt" for 49, ...); ""
-    // for slots DD assigns no meaning to and anything outside 30..61.
+    // Devious Devices' name for a biped slot, UPCASED for direct menu display
+    // ("CHASTITY BELT" for 49, ...); "" for slots DD assigns no meaning to and
+    // anything outside 30..61.
     std::string GetDDSlotName(RE::StaticFunctionTag*, std::int32_t a_slot) {
         if (a_slot < static_cast<std::int32_t>(GK::kBipedSlotFirst) ||
             a_slot > static_cast<std::int32_t>(GK::kBipedSlotLast)) {
             return {};
         }
-        return kDDSlotNames[static_cast<std::size_t>(a_slot) - GK::kBipedSlotFirst];
+        std::string out = kDDSlotNames[static_cast<std::size_t>(a_slot) - GK::kBipedSlotFirst];
+        for (auto& ch : out) {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        return out;
+    }
+
+    // ASCII-uppercased copy of a_text (non-ASCII bytes pass through untouched).
+    std::string UpCase(RE::StaticFunctionTag*, std::string_view a_text) {
+        std::string out(a_text);
+        for (auto& ch : out) {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        return out;
+    }
+
+    // a_text upcased and framed as a menu section header: rails of a_railChar
+    // (first character; '=' when empty) sized so the result approaches a_width
+    // characters ("== HARNESS / CORSET =="). Names at or beyond a_width get no
+    // rails, just the upcased text.
+    std::string MakeHeader(RE::StaticFunctionTag*, std::string_view a_text, std::int32_t a_width,
+                           std::string_view a_railChar) {
+        std::string name(a_text);
+        for (auto& ch : name) {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        const auto pad = (a_width - static_cast<std::int32_t>(name.size())) / 2;
+        if (pad < 1) {
+            return name;
+        }
+        const std::string rail(static_cast<std::size_t>(pad), a_railChar.empty() ? '=' : a_railChar.front());
+        return rail + " " + name + " " + rail;
     }
 
     // The human-readable name of a biped slot (same table LogActorOutfit
@@ -1493,16 +1536,6 @@ namespace {
         const auto* source = state->Outfits().Find(0, a_source);  // 0 = template namespace
         const GK::OutfitRegistry::Slots copy = source ? *source : GK::OutfitRegistry::Slots{};
         state->Outfits().GetOrCreate(targetID, a_target) = copy;  // target EXISTS afterwards, even if empty
-    }
-
-    // The outfit the CONVERGENCE functions aim for: the actor's own outfit
-    // when it exists, else the TEMPLATE of the same name -- actors inherit
-    // the defaults until an outfit is customized for them -- else nullptr
-    // (deemed all-empty).
-    [[nodiscard]] const GK::OutfitRegistry::Slots* FindOutfitOrTemplate(GK::GameState& a_state, RE::FormID a_actor,
-                                                                        std::string_view a_outfit) {
-        const auto* slots = a_state.Outfits().Find(a_actor, a_outfit);
-        return slots ? slots : a_state.Outfits().Find(0, a_outfit);
     }
 
     // Convergence, removal phase: scanning slots 30..61 in order, the first
@@ -2341,6 +2374,8 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("LogActorOutfit", kClass, LogActorOutfit);
         a_vm->RegisterFunction("GetSlotName", kClass, GetSlotName);
         a_vm->RegisterFunction("GetDDSlotName", kClass, GetDDSlotName);
+        a_vm->RegisterFunction("UpCase", kClass, UpCase);
+        a_vm->RegisterFunction("MakeHeader", kClass, MakeHeader);
         a_vm->RegisterFunction("GetOutfitDevices", kClass, GetOutfitDevices);
         a_vm->RegisterFunction("SetOutfitDevices", kClass, SetOutfitDevices);
         a_vm->RegisterFunction("GetOutfitDevice", kClass, GetOutfitDevice);
