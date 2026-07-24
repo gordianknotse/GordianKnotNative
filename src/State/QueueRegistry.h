@@ -49,6 +49,12 @@ namespace GK {
         // due actor is always in its queue by the time anything observes it.
         void PromoteDue(double a_now);
 
+        // Promote a_actor's DELAYED entry for the named queue right now,
+        // regardless of remaining time: the entry leaves the delayed list and
+        // joins its queue (normal Enqueue dedupe applies). False if no such
+        // delayed entry exists. Debug-overlay action.
+        bool PromoteDelayedNow(std::string_view a_queue, RE::FormID a_actor);
+
         // Pop and return the front FormID (0 if the queue is empty or unknown).
         // Callers resolve the FormID themselves; unresolvable entries are theirs
         // to skip (see the DequeueActor binding in GKNative.cpp).

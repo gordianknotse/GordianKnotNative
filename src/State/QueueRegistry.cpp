@@ -44,6 +44,18 @@ namespace GK {
         _delayed.erase(_delayed.begin(), _delayed.begin() + static_cast<std::ptrdiff_t>(due));
     }
 
+    bool QueueRegistry::PromoteDelayedNow(std::string_view a_queue, RE::FormID a_actor) {
+        const auto key = FoldCase(a_queue);
+        const auto it = std::ranges::find_if(
+            _delayed, [&](const DelayedEnqueue& d) { return d.actor == a_actor && d.queue == key; });
+        if (it == _delayed.end()) {
+            return false;
+        }
+        _delayed.erase(it);
+        Enqueue(key, a_actor);  // dedupe inside; a duplicate just evaporates
+        return true;
+    }
+
     RE::FormID QueueRegistry::Dequeue(std::string_view a_queue) {
         const auto it = _queues.find(FoldCase(a_queue));
         if (it == _queues.end()) {

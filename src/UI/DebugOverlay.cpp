@@ -299,8 +299,12 @@ namespace {
             ImGui::TextUnformatted("  (no labyrinth associations)");
         }
 
-        // Delayed enqueues targeting this actor (usually at most one).
+        // Delayed enqueues targeting this actor (usually at most one). The
+        // button promotes that entry into its queue immediately (pure registry
+        // mutation -- safe from this thread under the lock).
         const auto now = GK::NowSeconds();
+        std::string promoteQueue;
+        int delayedIdx = 0;
         for (const auto& entry : a_state.Queues().Delayed()) {
             if (entry.actor != a_id) {
                 continue;
@@ -311,6 +315,16 @@ namespace {
             } else {
                 ImGui::Text("delayed enqueue -> \"%s\" (due)", entry.queue.c_str());
             }
+            ImGui::SameLine();
+            ImGui::PushID(delayedIdx);
+            if (ImGui::SmallButton("Enqueue now")) {
+                promoteQueue = entry.queue;  // applied after the loop: the promote mutates Delayed()
+            }
+            ImGui::PopID();
+            ++delayedIdx;
+        }
+        if (!promoteQueue.empty()) {
+            a_state.Queues().PromoteDelayedNow(promoteQueue, a_id);
         }
     }
 
@@ -558,10 +572,14 @@ namespace {
             ImGui::TreePop();
         }
         if (!delayed.empty()) {
-            // Read-only view: due entries join their queue on the next queue call
-            // from Papyrus (PromoteDue), not from here -- hence "due" once ripe.
+            // Due entries normally join their queue on the next Papyrus queue
+            // call (PromoteDue); "Enqueue now" forces ONE entry in immediately
+            // (pure registry mutation -- safe from this thread under the lock).
             ImGui::SeparatorText("Delayed enqueues");
             const auto now = GK::NowSeconds();
+            std::string promoteQueue;
+            RE::FormID promoteActor = 0;
+            int idx = 0;
             for (const auto& entry : delayed) {
                 const double left = entry.due - now;
                 if (left > 0.0) {
@@ -569,6 +587,17 @@ namespace {
                 } else {
                     ImGui::Text("%s -> \"%s\" (due)", RefLabel(entry.actor).c_str(), entry.queue.c_str());
                 }
+                ImGui::SameLine();
+                ImGui::PushID(idx);
+                if (ImGui::SmallButton("Enqueue now")) {
+                    promoteQueue = entry.queue;  // applied after the loop: the
+                    promoteActor = entry.actor;  // promote mutates `delayed`
+                }
+                ImGui::PopID();
+                ++idx;
+            }
+            if (promoteActor != 0) {
+                a_state.Queues().PromoteDelayedNow(promoteQueue, promoteActor);
             }
         }
     }
