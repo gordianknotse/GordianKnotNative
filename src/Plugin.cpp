@@ -4,6 +4,7 @@
 #include "Events/EquipEventSink.h"
 #include "Papyrus/GKNative.h"
 #include "Serialization/Serialization.h"
+#include "Serialization/TemplateStore.h"
 #include "UI/DebugOverlay.h"
 
 // =============================================================================
@@ -40,6 +41,9 @@ namespace {
 
         case SKSE::MessagingInterface::kPostLoadGame:
         case SKSE::MessagingInterface::kNewGame:
+            // The co-save is already in (its Load callbacks ran before this
+            // message), so disk templates merge over it -- disk wins by name.
+            GK::Serialization::LoadTemplateFile();
             break;
 
         default:

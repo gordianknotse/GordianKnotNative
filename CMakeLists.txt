@@ -40,6 +40,7 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)  # debug overlay (src/UI), Dear ImGui + DX11 backend
+find_package(nlohmann_json CONFIG REQUIRED)  # cross-save template store (src/Serialization/TemplateStore)
 
 # Source list. Add new .cpp files here as the native layer grows. Headers are
 # listed so IDEs (CLion / VS) surface them in the project tree.
@@ -59,6 +60,7 @@ set(SOURCES
     src/State/RoleFactions.cpp
     src/Papyrus/GKNative.cpp
     src/Serialization/Serialization.cpp
+    src/Serialization/TemplateStore.cpp
     src/UI/DebugOverlay.cpp
 
     src/Log.h
@@ -87,6 +89,7 @@ set(SOURCES
     src/Papyrus/GKNative.h
     src/Serialization/Records.h
     src/Serialization/Serialization.h
+    src/Serialization/TemplateStore.h
     src/UI/DebugOverlay.h
 )
 
@@ -94,7 +97,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
 
 # Debug overlay: Dear ImGui rendered off a D3D11 present hook. d3d11/d3dcompiler
 # come from the Windows SDK (the ImGui DX11 backend compiles its shaders at init).
-target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui d3d11 d3dcompiler)
+target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui d3d11 d3dcompiler nlohmann_json::nlohmann_json)
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 target_precompile_headers(${PROJECT_NAME} PRIVATE src/PCH.h)

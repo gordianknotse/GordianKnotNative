@@ -1,5 +1,6 @@
 #include "Papyrus/GKNative.h"
 
+#include "Serialization/TemplateStore.h"
 #include "State/AliasPool.h"
 #include "State/CaseFold.h"
 #include "State/GameState.h"
@@ -1522,6 +1523,12 @@ namespace {
         state->Outfits().Erase(OutfitOwnerID(a_actor), a_outfit);
     }
 
+    // Cross-save template persistence; thin wrappers over the TemplateStore
+    // (Data/SKSE/Plugins/GordianKnot/templates.json, see TemplateStore.h).
+    std::int32_t SaveTemplateOutfitsToDisk(RE::StaticFunctionTag*) { return GK::Serialization::SaveTemplateFile(); }
+
+    std::int32_t LoadTemplateOutfitsFromDisk(RE::StaticFunctionTag*) { return GK::Serialization::LoadTemplateFile(); }
+
     // Copy the TEMPLATE outfit a_source onto a_targetActor as a_target, fully
     // replacing it. An unknown/empty template erases the target outfit. A None
     // target actor copies template-to-template (rename/duplicate).
@@ -2368,6 +2375,8 @@ namespace GK::Papyrus {
         a_vm->RegisterFunction("ActorOutfitRemoveDevice", kClass, ActorOutfitRemoveDevice);
         a_vm->RegisterFunction("ActorOutfitMerge", kClass, ActorOutfitMerge);
         a_vm->RegisterFunction("CopyTemplateOutfitToActor", kClass, CopyTemplateOutfitToActor);
+        a_vm->RegisterFunction("SaveTemplateOutfitsToDisk", kClass, SaveTemplateOutfitsToDisk);
+        a_vm->RegisterFunction("LoadTemplateOutfitsFromDisk", kClass, LoadTemplateOutfitsFromDisk);
         a_vm->RegisterFunction("ActorOutfitExists", kClass, ActorOutfitExists);
         a_vm->RegisterFunction("CreateEmptyOutfit", kClass, CreateEmptyOutfit);
         a_vm->RegisterFunction("DeleteActorOutfit", kClass, DeleteActorOutfit);

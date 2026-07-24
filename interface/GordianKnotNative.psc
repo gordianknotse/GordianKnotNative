@@ -503,6 +503,21 @@ Function DeleteActorOutfit(Actor akActor, String asOutfit) Global Native
 ; merge yields no devices.
 Function ActorOutfitMerge(Actor akActor, String[] asInputOutfits, String asResultOutfit) Global Native
 
+; Write ALL template outfits to Data/SKSE/Plugins/GordianKnot/templates.json
+; -- CROSS-SAVE storage shared by every character. Devices are stored as
+; "Plugin.esp|0xLocalID" (load-order independent); devices from dynamic
+; (save-local) forms cannot cross saves and are skipped with a log line.
+; Each template also carries a reserved "tags" field for future context
+; tagging. Returns the number of templates written, -1 on failure.
+Int Function SaveTemplateOutfitsToDisk() Global Native
+
+; Merge templates.json over the in-memory TEMPLATE outfits: same-named
+; templates are replaced from disk, templates existing only in this save
+; survive. Runs AUTOMATICALLY on every game load (after the co-save, so disk
+; wins by name) -- call manually only after hand-editing the file. Returns
+; the number of templates loaded, -1 when the file is absent or unreadable.
+Int Function LoadTemplateOutfitsFromDisk() Global Native
+
 ; Copy the TEMPLATE outfit asSourceOutfit onto akTargetActor as
 ; asTargetOutfit, FULLY replacing it; the target is DEFINED afterwards, even
 ; when the source template is unknown or empty (target becomes an empty
